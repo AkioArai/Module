@@ -159,6 +159,7 @@ JSON пишется с `sort_keys=True`, `ensure_ascii=False` и отступо�
 FROM_VERSION = NNN - 1
 TO_VERSION = NNN
 
+
 def migrate(data: dict) -> dict:
     game = data["game"]
     game["new_field"] = game.pop("old_field", DEFAULT)
