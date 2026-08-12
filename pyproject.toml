@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "module-sim"
+version = "0.1.0"
+description = "Терминальная idle-игра: симулятор энергокомпании с атомной станцией"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Зависимости ограничены официальными репозиториями Arch Linux.
+# См. CLAUDE.md, раздел «Зависимости»: добавление пакета вне этого списка —
+# нарушение инварианта упаковки.
+dependencies = [
+    "textual>=0.80",      # python-textual
+    "rich>=13.7",         # python-rich
+    "msgpack>=1.0",       # python-msgpack
+    "platformdirs>=4.0",  # python-platformdirs
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",        # python-pytest
+    "ruff>=0.5",          # ruff
+]
+
+[project.scripts]
+module = "module_sim.cli:main"
+mdl = "module_sim.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["module_sim"]
+
+[tool.hatch.build.targets.sdist]
+include = ["module_sim", "tests", "docs", "packaging", "CLAUDE.md", "README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: тесты дольше секунды (бенчмарки догона)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+    "RUF",
+]
+ignore = [
+    "RUF001",  # кириллица в строковых литералах — это язык интерфейса, не опечатка
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Тестам можно длинные литералы фикстур.
+"tests/**" = ["E501"]

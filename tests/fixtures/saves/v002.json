@@ -1,0 +1,20 @@
+{
+ "created_at": 1767225600.0,
+ "game": {
+  "company": {
+   "cash_cents": 50000000000,
+   "name": "Третий блок"
+  },
+  "epoch": 1767225600.0,
+  "rng": {
+   "counters": {
+    "sim.heartbeat": 2160
+   }
+  },
+  "seed": 20250303,
+  "speed": "x1",
+  "tick": 2160
+ },
+ "saved_at": 1767484800.0,
+ "schema_version": 2
+}

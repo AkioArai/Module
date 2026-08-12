@@ -1,0 +1,20 @@
+{
+ "created_at": 1767225600.0,
+ "game": {
+  "company": {
+   "balance": 1234567.89,
+   "name": "Второй блок"
+  },
+  "epoch": 1767225600.0,
+  "rng": {
+   "counters": {
+    "sim.heartbeat": 1440
+   }
+  },
+  "seed": 20250202,
+  "speed": "x5",
+  "tick": 1440
+ },
+ "saved_at": 1767398400.0,
+ "schema_version": 1
+}

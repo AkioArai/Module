@@ -1,0 +1,49 @@
+/* Единая тема (DESIGN.md, §11). Цветов в коде виджетов нет — только здесь.
+   Textual сам переключает $-переменные между светлым и тёмным вариантом,
+   поэтому обе темы обслуживаются одним файлом. */
+
+Screen {
+    background: $surface;
+    color: $foreground;
+}
+
+/* Панель времени. Всегда на виду, поэтому прибита к верху и не скроллится. */
+TimePanel {
+    dock: top;
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+    color: $foreground;
+}
+
+/* Тело: пока пусто, но каркас вкладок займёт именно его. */
+#body {
+    width: 100%;
+    height: 1fr;
+    align: center middle;
+    padding: 1 2;
+}
+
+#placeholder {
+    width: auto;
+    height: auto;
+    padding: 1 3;
+    border: round $primary;
+    color: $text-muted;
+    text-align: center;
+}
+
+#placeholder .title {
+    color: $foreground;
+    text-style: bold;
+}
+
+/* Сообщение о догоне и восстановлении из бэкапа: игрок обязан это увидеть. */
+#notice {
+    dock: bottom;
+    height: auto;
+    max-height: 4;
+    padding: 0 1;
+    background: $panel;
+    color: $text-muted;
+}
