@@ -47,33 +47,45 @@ def test_unknown_speed_rejected():
 
 def test_catchup_one_hour_per_second():
     clock = make_clock()
-    assert clock.missed_ticks(saved_at=1000.0, now=1000.0 + 3600.0) == 3600
+    assert clock.missed(saved_at=1000.0, now=1000.0 + 3600.0).ticks == 3600
 
 
 def test_pause_freezes_the_world():
     """Сохранился на паузе — вернулся в тот же мир."""
     clock = make_clock(speed=Speed.PAUSED)
-    assert clock.missed_ticks(saved_at=0.0, now=86_400.0) == 0
+    assert clock.missed(saved_at=0.0, now=86_400.0).ticks == 0
 
 
 def test_clock_backwards_is_not_a_rollback():
     """Часы машины ушли назад — это ноль тиков, а не откат симуляции."""
     clock = make_clock()
-    assert clock.missed_ticks(saved_at=5000.0, now=1000.0) == 0
+    assert clock.missed(saved_at=5000.0, now=1000.0).ticks == 0
 
 
 def test_catchup_is_capped():
     """Сломанные системные часы не превращают партию в мусор молча."""
     clock = make_clock()
-    absurd = clock.missed_ticks(saved_at=0.0, now=1e12)
-    assert absurd == MAX_CATCHUP_TICKS
+    absurd = clock.missed(saved_at=0.0, now=1e12)
+    assert absurd.ticks == MAX_CATCHUP_TICKS
+
+
+def test_capping_is_reported_not_silent():
+    """Упор в потолок обязан быть виден: чаще всего это сбитые системные часы,
+    и игрок должен понимать, почему партия скакнула на век вперёд."""
+    capped = make_clock().missed(saved_at=0.0, now=1e12)
+    assert capped.capped
+    assert capped.dropped > 0
+
+    normal = make_clock().missed(saved_at=0.0, now=3600.0)
+    assert not normal.capped
+    assert normal.dropped == 0
 
 
 def test_partial_tick_is_dropped():
     """Догон начисляет целые часы; недобранный остаток пропадает."""
     clock = make_clock()
-    assert clock.missed_ticks(saved_at=0.0, now=0.9) == 0
-    assert clock.missed_ticks(saved_at=0.0, now=1.5) == 1
+    assert clock.missed(saved_at=0.0, now=0.9).ticks == 0
+    assert clock.missed(saved_at=0.0, now=1.5).ticks == 1
 
 
 def test_clock_state_lives_in_game_state():

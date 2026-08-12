@@ -12,12 +12,13 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from module_sim.core.sim import Simulation
 from module_sim.core.state import Speed
 from module_sim.persistence import paths
 from module_sim.persistence import save as save_mod
-from module_sim.ui.app import ModuleApp
+from module_sim.ui.app import MAX_FRAME_ELAPSED_S, MAX_TICKS_PER_FRAME, ModuleApp
 from module_sim.ui.widgets.time_panel import TimePanel
 
 EPOCH = 1_767_225_600.0  # 01.01.2026 UTC
@@ -117,3 +118,85 @@ def test_time_advances_while_running():
 
     run(scenario())
     assert sim.state.tick >= 10
+
+
+# -- потолок работы на кадр ------------------------------------------------
+#
+# Кадр может прийти сильно позже назначенного: своп, приостановка процесса,
+# тяжёлый сосед. Без потолка накопленный интервал превратился бы в сотни тиков,
+# посчитанных синхронно в цикле событий, и окно бы замерло (И7).
+
+
+def test_long_stall_does_not_simulate_proportionally():
+    """Затык на минуту не должен считать час игрового времени в одном кадре."""
+    app, sim = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            app.action_speed(Speed.X50)
+            await pilot.pause()
+            before = sim.state.tick
+            # Кадр «опоздал» на минуту реального времени.
+            app._frame_at -= 60.0
+            app._on_frame()
+            await pilot.pause()
+            # На 50x минута дала бы 3000 тиков; потолок обрезает до секунды.
+            assert sim.state.tick - before <= int(MAX_FRAME_ELAPSED_S * 50) + 1
+
+    run(scenario())
+
+
+def _count_paths(monkeypatch) -> dict[str, int]:
+    """Посчитать, каким путём кадр двигал время.
+
+    Подмена идёт на классе, а не на экземпляре: у ``Simulation`` есть
+    ``__slots__``, и методы на объекте не переопределяются.
+    """
+    calls = {"run": 0, "catch_up": 0}
+    monkeypatch.setattr(
+        Simulation, "run", lambda self, n: calls.__setitem__("run", calls["run"] + n)
+    )
+    monkeypatch.setattr(
+        Simulation, "catch_up", lambda self, n: calls.__setitem__("catch_up", calls["catch_up"] + n)
+    )
+    return calls
+
+
+def test_short_interval_goes_tick_by_tick(monkeypatch):
+    """Пока часов немного, игрок видит каждый: считаем потиково."""
+    app, _ = make_app()
+    calls = _count_paths(monkeypatch)
+
+    app._tick_debt = float(MAX_TICKS_PER_FRAME)
+    app._frame_at = time.monotonic()
+    app._on_frame()
+
+    assert calls["run"] >= MAX_TICKS_PER_FRAME
+    assert calls["catch_up"] == 0
+
+
+def test_large_interval_goes_through_the_batch_path(monkeypatch):
+    """Большой остаток считается батчем, а не линейно по часам."""
+    app, _ = make_app()
+    calls = _count_paths(monkeypatch)
+
+    app._tick_debt = float(MAX_TICKS_PER_FRAME * 4)
+    app._frame_at = time.monotonic()
+    app._on_frame()
+
+    assert calls["catch_up"] > 0
+    assert calls["run"] == 0
+
+
+def test_speed_change_does_not_spill_accumulated_debt():
+    """Долг тиков накоплен по прежнему множителю; переносить его нельзя."""
+    app, _ = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            app._tick_debt = 0.99
+            app.action_speed(Speed.X50)
+            assert app._tick_debt == 0.0
+
+    run(scenario())

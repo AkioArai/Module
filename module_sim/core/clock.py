@@ -13,11 +13,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from module_sim.core.state import SPEED_MULTIPLIER, GameState, Speed
 
-__all__ = ["CATCHUP_TICKS_PER_SECOND", "MAX_CATCHUP_TICKS", "Clock"]
+__all__ = ["CATCHUP_TICKS_PER_SECOND", "MAX_CATCHUP_TICKS", "Clock", "Missed"]
 
 #: Сколько игровых часов начисляется за реальную секунду отсутствия.
 #: Совпадает со скоростью 1x: мир не движется быстрее оттого, что игрока не
@@ -30,6 +31,23 @@ CATCHUP_TICKS_PER_SECOND = 1.0
 #: батчинг справится, — а чтобы сломанные системные часы (скачок в 2038-й)
 #: не превращали партию в мусор молча. Упор в потолок логируется.
 MAX_CATCHUP_TICKS = 100 * 365 * 24
+
+
+@dataclass(frozen=True, slots=True)
+class Missed:
+    """Сколько времени прошло без игрока и сколько из него потерялось.
+
+    ``dropped`` существует затем, что упор в ``MAX_CATCHUP_TICKS`` обязан быть
+    виден. Молча начислить сто лет вместо тысячи — значит подменить партию и не
+    сказать: игрок решит, что игра сломалась, хотя сломались системные часы.
+    """
+
+    ticks: int
+    dropped: int = 0
+
+    @property
+    def capped(self) -> bool:
+        return self.dropped > 0
 
 
 class Clock:
@@ -86,7 +104,7 @@ class Clock:
 
     # -- догон -----------------------------------------------------------
 
-    def missed_ticks(self, saved_at: float, now: float) -> int:
+    def missed(self, saved_at: float, now: float) -> Missed:
         """Сколько игровых часов начислить за отсутствие игрока.
 
         Пауза замораживает мир: если партию сохранили на паузе, при следующем
@@ -99,12 +117,14 @@ class Clock:
         симуляции.
         """
         if self.paused:
-            return 0
+            return Missed(0)
         elapsed = now - saved_at
         if elapsed <= 0.0:
-            return 0
+            return Missed(0)
         ticks = int(elapsed * CATCHUP_TICKS_PER_SECOND)
-        return min(ticks, MAX_CATCHUP_TICKS)
+        if ticks > MAX_CATCHUP_TICKS:
+            return Missed(MAX_CATCHUP_TICKS, dropped=ticks - MAX_CATCHUP_TICKS)
+        return Missed(ticks)
 
     def __repr__(self) -> str:
         return f"Clock(tick={self.state.tick}, speed={self.state.speed!r})"

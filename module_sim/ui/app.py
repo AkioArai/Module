@@ -34,6 +34,21 @@ __all__ = ["ModuleApp"]
 #: Частота кадров UI. К симуляции отношения не имеет (И3).
 FRAME_INTERVAL = 1.0 / 20.0
 
+#: Максимум реального времени, засчитываемого за один кадр (BALANCE.md, §1).
+#:
+#: Кадр может прийти сильно позже назначенного: своп, приостановка процесса,
+#: тяжёлый соседний процесс. Без потолка накопленный интервал превратился бы в
+#: сотни тиков, посчитанных синхронно в цикле событий, — интерфейс замер бы,
+#: нарушив И7. Цена потолка: во время затыка игровое время отстаёт от
+#: реального. Это честнее зависшего окна, и на догон при следующем запуске не
+#: влияет — тот считается от ``saved_at``, а не от числа тиков.
+MAX_FRAME_ELAPSED_S = 1.0
+
+#: Сколько тиков ещё разумно посчитать потиково прямо в кадре. Больше —
+#: батчевым путём: он даёт тот же результат в пределах допуска И4а, но не
+#: линейно по числу часов.
+MAX_TICKS_PER_FRAME = 16
+
 #: Автосохранение раз в игровые сутки, но не чаще раза в 5 реальных секунд
 #: (BALANCE.md, §1).
 AUTOSAVE_EVERY_TICKS = 24
@@ -105,7 +120,7 @@ class ModuleApp(App):
 
     def _on_frame(self) -> None:
         now = time.monotonic()
-        elapsed = now - self._frame_at
+        elapsed = min(now - self._frame_at, MAX_FRAME_ELAPSED_S)
         self._frame_at = now
 
         multiplier = SPEED_MULTIPLIER[self.simulation.state.speed]
@@ -114,10 +129,22 @@ class ModuleApp(App):
             whole = int(self._tick_debt)
             if whole:
                 self._tick_debt -= whole
-                self.simulation.run(whole)
+                self._simulate(whole)
 
         self._refresh_panel()
         self._maybe_autosave(now)
+
+    def _simulate(self, ticks: int) -> None:
+        """Посчитать ``ticks`` часов, не подвешивая кадр.
+
+        Короткий интервал идёт потиково — так игрок видит каждый час, если
+        смотрит на медленной скорости. Длинный уходит в батч: результат тот же
+        в пределах допуска И4а, а время работы не растёт линейно по часам.
+        """
+        if ticks <= MAX_TICKS_PER_FRAME:
+            self.simulation.run(ticks)
+        else:
+            self.simulation.catch_up(ticks)
 
     def _refresh_panel(self) -> None:
         panel = self._panel
@@ -160,6 +187,9 @@ class ModuleApp(App):
 
     def action_speed(self, speed: str) -> None:
         self.simulation.clock.set_speed(speed)
+        # Долг тиков накоплен по прежнему множителю; переносить его на новую
+        # скорость значило бы выплюнуть лишний час при переключении.
+        self._tick_debt = 0.0
         self._refresh_panel()
 
     def action_save_now(self) -> None:
