@@ -1,0 +1,47 @@
+{
+ "created_at": 1767225600.0,
+ "game": {
+  "company": {
+   "cash_cents": 500000050,
+   "name": "Первый блок"
+  },
+  "epoch": 1767225600.0,
+  "rng": {
+   "counters": {
+    "sim.heartbeat": 720
+   }
+  },
+  "scheduler": {
+   "events": [
+    {
+     "kind": "maintenance.due",
+     "order": 0,
+     "payload": {
+      "unit": 1
+     },
+     "tick": 744
+    },
+    {
+     "kind": "market.settlement",
+     "order": 1,
+     "payload": {
+      "period": "day"
+     },
+     "tick": 744
+    },
+    {
+     "kind": "fuel.campaign_end",
+     "order": 2,
+     "payload": {},
+     "tick": 13860
+    }
+   ],
+   "next_order": 4
+  },
+  "seed": 20250101,
+  "speed": "x1",
+  "tick": 720
+ },
+ "saved_at": 1770000000.0,
+ "schema_version": 3
+}

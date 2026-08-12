@@ -1,0 +1,60 @@
+{
+ "created_at": 1767225600.0,
+ "game": {
+  "company": {
+   "cash_cents": 266000000000,
+   "name": "Первый блок"
+  },
+  "epoch": 1767225600.0,
+  "market": {
+   "energy_sold_mwh": 720000.0,
+   "revenue_paid_cents": 216000000000
+  },
+  "next_order_id": 1,
+  "orders": [
+   {
+    "ends_tick": 840,
+    "event_order": 31,
+    "id": 0,
+    "issued_tick": 720,
+    "kind": "maintenance",
+    "payload": {},
+    "status": "выполняется"
+   }
+  ],
+  "reactor": {
+   "burnup": 0.05555555555555508,
+   "power_level": 0.0,
+   "power_setpoint": 0.0
+  },
+  "rng": {
+   "counters": {
+    "sim.heartbeat": 744
+   }
+  },
+  "scheduler": {
+   "events": [
+    {
+     "kind": "market.settlement",
+     "order": 32,
+     "payload": {},
+     "tick": 768
+    },
+    {
+     "kind": "order.complete",
+     "order": 31,
+     "payload": {
+      "order_id": 0
+     },
+     "tick": 840
+    }
+   ],
+   "next_order": 33
+  },
+  "seed": 20250101,
+  "speed": "x1",
+  "tick": 744
+ },
+ "saved_at": 1770000000.0,
+ "schema_version": 4
+}

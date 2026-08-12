@@ -85,11 +85,36 @@ def _fsync_dir(directory: Path) -> None:
         os.close(fd)
 
 
+def _process_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Процесс есть, но чужой. Для нас это «жив» — трогать его файлы нельзя.
+        return True
+    except OSError:
+        return True
+    return True
+
+
 def _cleanup_stale_temp(directory: Path, stem: str) -> None:
-    """Подчистить временные файлы прерванных записей."""
+    """Подчистить временные файлы прерванных записей.
+
+    Удаляются только те, чей процесс уже мёртв. Иначе уборка сносила бы файл,
+    который прямо сейчас пишет другая копия игры: её ``os.replace`` упал бы с
+    ENOENT, то есть чужое сохранение не просто затёрлось бы, а завершилось
+    исключением. Блокировка партии (``persistence/lock.py``) делает такое
+    столкновение маловероятным, но уборка мусора не то место, где стоит
+    полагаться на «маловероятно».
+    """
+    own = os.getpid()
     for leftover in directory.glob(f"{stem}.tmp-*"):
-        # Чужой процесс мог писать свой временный файл прямо сейчас.
-        # Уборка мусора не имеет права ломать сохранение.
+        suffix = leftover.name.rsplit(".tmp-", 1)[-1]
+        if suffix.isdigit():
+            pid = int(suffix)
+            if pid != own and _process_is_alive(pid):
+                continue
         with contextlib.suppress(OSError):
             leftover.unlink()
 

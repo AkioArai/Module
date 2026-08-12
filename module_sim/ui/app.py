@@ -24,15 +24,34 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import Footer, Static
 
+from module_sim.core import orders
+from module_sim.core.economy import finance
+from module_sim.core.physics import reactor
 from module_sim.core.sim import Simulation
 from module_sim.core.state import SPEED_MULTIPLIER, Speed
 from module_sim.persistence import save as save_mod
+from module_sim.ui.widgets.station_panel import StationPanel
 from module_sim.ui.widgets.time_panel import TimePanel
 
 __all__ = ["ModuleApp"]
 
 #: Частота кадров UI. К симуляции отношения не имеет (И3).
 FRAME_INTERVAL = 1.0 / 20.0
+
+#: Максимум реального времени, засчитываемого за один кадр (BALANCE.md, §1).
+#:
+#: Кадр может прийти сильно позже назначенного: своп, приостановка процесса,
+#: тяжёлый соседний процесс. Без потолка накопленный интервал превратился бы в
+#: сотни тиков, посчитанных синхронно в цикле событий, — интерфейс замер бы,
+#: нарушив И7. Цена потолка: во время затыка игровое время отстаёт от
+#: реального. Это честнее зависшего окна, и на догон при следующем запуске не
+#: влияет — тот считается от ``saved_at``, а не от числа тиков.
+MAX_FRAME_ELAPSED_S = 1.0
+
+#: Сколько тиков ещё разумно посчитать потиково прямо в кадре. Больше —
+#: батчевым путём: он даёт тот же результат в пределах допуска И4а, но не
+#: линейно по числу часов.
+MAX_TICKS_PER_FRAME = 16
 
 #: Автосохранение раз в игровые сутки, но не чаще раза в 5 реальных секунд
 #: (BALANCE.md, §1).
@@ -51,6 +70,10 @@ class ModuleApp(App):
         Binding("1", "speed('x1')", "1x"),
         Binding("2", "speed('x5')", "5x"),
         Binding("3", "speed('x50')", "50x"),
+        Binding("up", "power(0.1)", "Мощность +"),
+        Binding("down", "power(-0.1)", "Мощность −"),
+        Binding("r", "order('refuel')", "Перегрузка"),
+        Binding("m", "order('maintenance')", "ТО"),
         Binding("s", "save_now", "Сохранить"),
         Binding("d", "toggle_dark", "Тема"),
         Binding("q", "quit", "Выход"),
@@ -79,23 +102,20 @@ class ModuleApp(App):
         #: Не только ради скорости: таймер кадра может сработать в момент, когда
         #: виджеты уже сняты (выход, смена экрана), и поиск упал бы NoMatches.
         self._panel: TimePanel | None = None
+        self._station: StationPanel | None = None
 
     # -- разметка --------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield TimePanel(id="time-panel")
         with Container(id="body"):
-            yield Static(
-                "[b]Пусто.[/b]\n\n"
-                "Фаза 0: каркас, часы и сохранения.\n"
-                "Реактор, рынок и персонал появятся в следующих фазах.",
-                id="placeholder",
-            )
+            yield StationPanel(id="station")
         yield Static(self.notice_text, id="notice")
         yield Footer()
 
     def on_mount(self) -> None:
         self._panel = self.query_one(TimePanel)
+        self._station = self.query_one(StationPanel)
         self._frame_at = time.monotonic()
         self._last_autosave_at = self._frame_at
         self.set_interval(FRAME_INTERVAL, self._on_frame)
@@ -105,7 +125,7 @@ class ModuleApp(App):
 
     def _on_frame(self) -> None:
         now = time.monotonic()
-        elapsed = now - self._frame_at
+        elapsed = min(now - self._frame_at, MAX_FRAME_ELAPSED_S)
         self._frame_at = now
 
         multiplier = SPEED_MULTIPLIER[self.simulation.state.speed]
@@ -114,10 +134,22 @@ class ModuleApp(App):
             whole = int(self._tick_debt)
             if whole:
                 self._tick_debt -= whole
-                self.simulation.run(whole)
+                self._simulate(whole)
 
         self._refresh_panel()
         self._maybe_autosave(now)
+
+    def _simulate(self, ticks: int) -> None:
+        """Посчитать ``ticks`` часов, не подвешивая кадр.
+
+        Короткий интервал идёт потиково — так игрок видит каждый час, если
+        смотрит на медленной скорости. Длинный уходит в батч: результат тот же
+        в пределах допуска И4а, а время работы не растёт линейно по часам.
+        """
+        if ticks <= MAX_TICKS_PER_FRAME:
+            self.simulation.run(ticks)
+        else:
+            self.simulation.catch_up(ticks)
 
     def _refresh_panel(self) -> None:
         panel = self._panel
@@ -128,6 +160,37 @@ class ModuleApp(App):
         panel.game_date = self.simulation.clock.format_datetime()
         panel.speed = state.speed
         panel.tick = state.tick
+
+        station = self._station
+        if station is None:
+            return
+        station.power_mw = reactor.electric_mw(state.reactor)
+        station.setpoint = state.reactor.power_setpoint
+        station.level = state.reactor.power_level
+        station.burnup = state.reactor.burnup
+        station.cash_cents = state.company.cash_cents
+        station.energy_mwh = state.market.energy_sold_mwh
+        station.debt_cents = state.finance.debt_cents
+        station.equity_cents = finance.equity_cents(self.simulation)
+        station.rate = finance.annual_rate(self.simulation)
+        station.status = state.finance.status
+        station.status_note = self._status_note()
+        station.orders_line = self._orders_line()
+
+    def _status_note(self) -> str:
+        """Срок на исправление всегда на виду: провал обязан быть предсказуем (И8)."""
+        state = self.simulation.state
+        if state.finance.status != finance.STATUS_GRACE:
+            return ""
+        left = max(0, state.finance.grace_ends_tick - state.tick)
+        return f" (осталось {left // 24} сут)"
+
+    def _orders_line(self) -> str:
+        active = orders.active_orders(self.simulation)
+        if not active:
+            return "нет"
+        now = self.simulation.state.tick
+        return ", ".join(f"{raw['kind']} (осталось {raw['ends_tick'] - now} ч)" for raw in active)
 
     def _maybe_autosave(self, now: float) -> None:
         state = self.simulation.state
@@ -160,6 +223,29 @@ class ModuleApp(App):
 
     def action_speed(self, speed: str) -> None:
         self.simulation.clock.set_speed(speed)
+        # Долг тиков накоплен по прежнему множителю; переносить его на новую
+        # скорость значило бы выплюнуть лишний час при переключении.
+        self._tick_debt = 0.0
+        self._refresh_panel()
+
+    def action_power(self, delta: float) -> None:
+        """Сдвинуть уставку мощности. Блок пойдёт к ней сам, ждать не нужно."""
+        reactor_state = self.simulation.state.reactor
+        target = min(1.0, max(0.0, reactor_state.power_setpoint + delta))
+        reactor_state.power_setpoint = target
+        self._refresh_panel()
+
+    def action_order(self, kind: str) -> None:
+        """Отдать приказ. Управление возвращается сразу (И7)."""
+        try:
+            order = orders.issue_order(self.simulation, kind)
+        except ValueError as exc:
+            self.query_one("#notice", Static).update(str(exc))
+            return
+        hours = order.ends_tick - order.issued_tick
+        self.query_one("#notice", Static).update(
+            f"Приказ «{order.kind}» принят, завершится через {hours} ч."
+        )
         self._refresh_panel()
 
     def action_save_now(self) -> None:
@@ -170,4 +256,5 @@ class ModuleApp(App):
         # Выход обязан оставить партию на диске: инвариант И6 запрещает любую
         # активность после закрытия, значит последний шанс — здесь.
         self._panel = None
+        self._station = None
         self._save()

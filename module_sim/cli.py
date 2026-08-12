@@ -15,10 +15,12 @@ import time
 from pathlib import Path
 
 from module_sim import __version__
+from module_sim.core.economy import finance
 from module_sim.core.sim import Simulation
 from module_sim.core.state import Speed
 from module_sim.persistence import paths
 from module_sim.persistence import save as save_mod
+from module_sim.persistence.lock import SaveLock, SaveLocked
 from module_sim.persistence.migrations import CURRENT_SCHEMA_VERSION
 
 __all__ = ["main"]
@@ -46,7 +48,14 @@ def _load_or_create(args: argparse.Namespace) -> tuple[Simulation, float, str]:
     if args.new or not save_mod.has_save(save_path):
         seed = args.seed if args.seed is not None else int(now * 1000) & 0x7FFF_FFFF
         simulation = Simulation.new_game(seed=seed, epoch=now)
-        return simulation, now, f"Новая партия. Seed {seed}."
+        meta = save_mod.load_meta()
+        finance.start_company(simulation, meta.carried_debt_cents)
+        note = f"Новая партия. Seed {seed}."
+        if meta.carried_debt_cents:
+            note += (
+                f" Долг прошлой компании — {meta.carried_debt_cents / 100:,.0f} ₽ — перешёл на эту."
+            ).replace(",", " ")
+        return simulation, now, note
 
     result = save_mod.load_game(save_path)
     simulation = Simulation(result.state)
@@ -60,21 +69,76 @@ def _load_or_create(args: argparse.Namespace) -> tuple[Simulation, float, str]:
         last = result.migrated[-1].to_version
         notes.append(f"Сейв обновлён со схемы v{first} до v{last}.")
 
-    missed = simulation.clock.missed_ticks(result.saved_at, now)
-    if missed:
+    status_before = simulation.state.finance.status
+
+    missed = simulation.clock.missed(result.saved_at, now)
+    if missed.ticks:
         started = time.monotonic()
-        simulation.catch_up(missed)
+        simulation.catch_up(missed.ticks)
         spent = time.monotonic() - started
-        rate = missed / spent if spent > 0 else float("inf")
-        notes.append(f"Досчитано {_plural_hours(missed)} ({missed} тиков, {rate:,.0f} тик/с).")
+        rate = missed.ticks / spent if spent > 0 else float("inf")
+        notes.append(
+            f"Досчитано {_plural_hours(missed.ticks)} ({missed.ticks} тиков, {rate:,.0f} тик/с)."
+        )
     elif simulation.clock.paused:
         notes.append("Партия была на паузе — время не шло.")
+
+    if missed.capped:
+        # Молчать здесь нельзя: чаще всего это не «долго не играл», а сбитые
+        # системные часы, и игрок должен понимать, что произошло.
+        notes.append(
+            f"Отброшено {_plural_hours(missed.dropped)} сверх потолка догона — "
+            f"проверьте системное время."
+        )
+
+    became_bankrupt_away = (
+        simulation.state.finance.status == finance.STATUS_BANKRUPT
+        and status_before != finance.STATUS_BANKRUPT
+    )
+    if became_bankrupt_away:
+        # DESIGN.md, §Р5: партия не заканчивается, пока игрока нет.
+        finance.grant_return_grace(simulation)
+        notes.append(
+            "Пока вас не было, компания дошла до банкротства. "
+            f"Дан срок на исправление — {finance.GRACE_HOURS // 24} суток."
+        )
+    elif simulation.state.finance.status == finance.STATUS_BANKRUPT:
+        carried = finance.carried_debt_cents(simulation)
+        meta = save_mod.load_meta()
+        meta.carried_debt_cents = carried
+        meta.bankruptcies += 1
+        save_mod.save_meta(meta)
+        notes.append(
+            f"Компания обанкротилась. Непогашенный долг — {carried / 100:,.0f} ₽ — "
+            "перейдёт на следующую партию. Начните новую: module --new.".replace(",", " ")
+        )
+    elif simulation.state.finance.status == finance.STATUS_GRACE:
+        left = max(0, simulation.state.finance.grace_ends_tick - simulation.state.tick)
+        notes.append(f"Предбанкротное состояние: на исправление осталось {left // 24} суток.")
+
+    if simulation.unknown_events:
+        kinds = ", ".join(sorted(set(simulation.unknown_events)))
+        notes.append(f"Пропущены незнакомые события из сейва: {kinds}.")
 
     return simulation, result.created_at, " ".join(notes)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     paths.ensure_dirs()
+    save_target = Path(args.save) if args.save else paths.save_path()
+
+    # Блокировка берётся до чтения сейва и держится до конца игры. Две копии,
+    # открывшие одну партию, автосохраняются поверх друг друга, и последняя
+    # запись молча уносит чужой прогресс (persistence/lock.py).
+    try:
+        with SaveLock(save_target):
+            return _run_locked(args)
+    except SaveLocked as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+
+
+def _run_locked(args: argparse.Namespace) -> int:
     simulation, created_at, notice = _load_or_create(args)
 
     if args.speed:
@@ -235,6 +299,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  {mark} {label:<10} {path}")
 
     print("\nСейв:")
+    if SaveLock.is_locked(paths.save_path()):
+        print("  ! партия открыта в другом окне")
     if not save_mod.has_save():
         print("  · партии ещё нет")
     else:

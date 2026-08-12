@@ -26,7 +26,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-__all__ = ["SPEED_MULTIPLIER", "CompanyState", "GameState", "Speed"]
+__all__ = [
+    "SPEED_MULTIPLIER",
+    "CompanyState",
+    "FinanceState",
+    "GameState",
+    "MarketState",
+    "ReactorState",
+    "Speed",
+]
 
 
 class Speed:
@@ -66,6 +74,105 @@ class CompanyState:
 
 
 @dataclass(slots=True)
+class ReactorState:
+    """Блок. Фаза 1: мощность и выгорание, без кинетики и ксенона.
+
+    Первые непрерывные величины партии — с них контракт И4а перестаёт быть
+    теоретическим (CLAUDE.md, §И4а).
+    """
+
+    #: Уставка и текущая мощность в долях номинала, 0…1.
+    power_setpoint: float = 0.0
+    power_level: float = 0.0
+    #: Доля выработанной топливной кампании. Единица — топливо выработано;
+    #: обрыва на ней в фазе 1 нет, см. physics/reactor.py.
+    burnup: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "power_setpoint": self.power_setpoint,
+            "power_level": self.power_level,
+            "burnup": self.burnup,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ReactorState:
+        return cls(
+            power_setpoint=data["power_setpoint"],
+            power_level=data["power_level"],
+            burnup=data["burnup"],
+        )
+
+
+@dataclass(slots=True)
+class MarketState:
+    """Расчёты за энергию (economy/market.py).
+
+    Хранится накопленная выработка и уже выплаченное за неё. Разница между ними
+    и есть очередной платёж — так ошибка округления не накапливается по
+    периодам, сколько бы их ни прошло.
+    """
+
+    energy_sold_mwh: float = 0.0
+    revenue_paid_cents: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "energy_sold_mwh": self.energy_sold_mwh,
+            "revenue_paid_cents": self.revenue_paid_cents,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> MarketState:
+        return cls(
+            energy_sold_mwh=data["energy_sold_mwh"],
+            revenue_paid_cents=data["revenue_paid_cents"],
+        )
+
+
+@dataclass(slots=True)
+class FinanceState:
+    """Долг, ставка и состояние компании (economy/finance.py).
+
+    Всё в целых копейках и меняется только в месячном событии — иначе округление
+    происходило бы в разных точках у батчевого и потикового пути (И4а).
+    """
+
+    debt_cents: int = 0
+    assets_cents: int = 0
+    #: Месяцев подряд, когда выручка не покрыла проценты и расходы.
+    months_below_covenant: int = 0
+    #: Сколько раз ковенант был нарушен совсем: каждое нарушение дорожает долг.
+    covenant_breaches: int = 0
+    status: str = "норма"
+    #: Тик, когда истекает срок на исправление. Ноль — срока нет.
+    grace_ends_tick: int = 0
+    #: До какого тика действует наказание за списание долга.
+    discharge_penalty_until_tick: int = 0
+    discharges: int = 0
+    #: Снимок выплаченной выручки на прошлом месячном событии — из разницы
+    #: считается, покрыл ли месяц свои расходы.
+    revenue_at_last_month_cents: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "debt_cents": self.debt_cents,
+            "assets_cents": self.assets_cents,
+            "months_below_covenant": self.months_below_covenant,
+            "covenant_breaches": self.covenant_breaches,
+            "status": self.status,
+            "grace_ends_tick": self.grace_ends_tick,
+            "discharge_penalty_until_tick": self.discharge_penalty_until_tick,
+            "discharges": self.discharges,
+            "revenue_at_last_month_cents": self.revenue_at_last_month_cents,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> FinanceState:
+        return cls(**{key: data[key] for key in cls.__slots__})
+
+
+@dataclass(slots=True)
 class GameState:
     """Корень состояния партии.
 
@@ -81,6 +188,17 @@ class GameState:
     company: CompanyState = field(default_factory=CompanyState)
     #: Счётчики потоков RNG, а не состояние генератора (core/rng.py).
     rng_counters: dict[str, int] = field(default_factory=dict)
+    #: Очередь дискретных событий (core/events/scheduler.py). Хранится сырым
+    #: словарём: ``Scheduler`` живёт в ``Simulation`` и синхронизируется сюда
+    #: тем же способом, что и счётчики RNG, — единственной точкой перед записью.
+    scheduler: dict = field(default_factory=lambda: {"events": [], "next_order": 0})
+    reactor: ReactorState = field(default_factory=ReactorState)
+    market: MarketState = field(default_factory=MarketState)
+    finance: FinanceState = field(default_factory=FinanceState)
+    #: Приказы сырыми словарями — как и очередь событий. Объекты ``Order``
+    #: создаются поверх по надобности (core/orders.py).
+    orders: list[dict] = field(default_factory=list)
+    next_order_id: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -90,10 +208,20 @@ class GameState:
             "speed": self.speed,
             "company": self.company.to_dict(),
             "rng": {"counters": dict(self.rng_counters)},
+            "scheduler": {
+                "events": [dict(event) for event in self.scheduler.get("events", [])],
+                "next_order": self.scheduler.get("next_order", 0),
+            },
+            "reactor": self.reactor.to_dict(),
+            "market": self.market.to_dict(),
+            "finance": self.finance.to_dict(),
+            "orders": [dict(order) for order in self.orders],
+            "next_order_id": self.next_order_id,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> GameState:
+        scheduler = data["scheduler"]
         return cls(
             seed=data["seed"],
             tick=data["tick"],
@@ -101,4 +229,13 @@ class GameState:
             speed=data["speed"],
             company=CompanyState.from_dict(data["company"]),
             rng_counters=dict(data["rng"]["counters"]),
+            scheduler={
+                "events": [dict(event) for event in scheduler["events"]],
+                "next_order": scheduler["next_order"],
+            },
+            reactor=ReactorState.from_dict(data["reactor"]),
+            market=MarketState.from_dict(data["market"]),
+            finance=FinanceState.from_dict(data["finance"]),
+            orders=[dict(order) for order in data["orders"]],
+            next_order_id=data["next_order_id"],
         )
