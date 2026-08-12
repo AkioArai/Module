@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Сейвы разработчика. Фикстуры в tests/fixtures/saves/ — наоборот, в git
+# обязательно: без них нечем проверять, что обновление не теряет прогресс.
+save.json
+save.json.*
+meta.json

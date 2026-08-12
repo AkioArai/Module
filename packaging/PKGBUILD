@@ -1,0 +1,60 @@
+# Maintainer: snailsomi <snailsomi@gmail.com>
+#
+# Зависимости — ТОЛЬКО из официальных репозиториев Arch (CLAUDE.md,
+# §Зависимости). Ни одного пакета из AUR. Известно, что plotext и ptpython в
+# официальных репозиториях отсутствуют, поэтому графики рисуются своими
+# виджетами Textual, а REPL — на модулях стандартной библиотеки.
+
+pkgname=module-sim
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Терминальная idle-игра: симулятор энергокомпании с атомной станцией"
+arch=('any')
+url="https://github.com/AkioArai/Module"
+license=('MIT')
+
+depends=(
+  'python'
+  'python-textual'
+  'python-rich'
+  'python-msgpack'
+  'python-platformdirs'
+)
+
+makedepends=(
+  'python-build'
+  'python-installer'
+  'python-hatchling'
+  'python-wheel'
+)
+
+checkdepends=(
+  'python-pytest'
+)
+
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/Module-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$srcdir/Module-$pkgver"
+  # Бенчмарк догона пропускаем: на машине сборщика он мерит не тот код, а
+  # загруженность сборочного узла. Всё остальное, включая цепочку миграций,
+  # прогоняется обязательно.
+  PYTHONPATH="$PWD" pytest -q -m "not slow"
+}
+
+package() {
+  cd "$srcdir/Module-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 CLAUDE.md "$pkgdir/usr/share/doc/$pkgname/CLAUDE.md"
+  for doc in docs/*.md; do
+    install -Dm644 "$doc" "$pkgdir/usr/share/doc/$pkgname/$doc"
+  done
+}
