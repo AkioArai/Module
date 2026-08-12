@@ -81,6 +81,10 @@ class GameState:
     company: CompanyState = field(default_factory=CompanyState)
     #: Счётчики потоков RNG, а не состояние генератора (core/rng.py).
     rng_counters: dict[str, int] = field(default_factory=dict)
+    #: Очередь дискретных событий (core/events/scheduler.py). Хранится сырым
+    #: словарём: ``Scheduler`` живёт в ``Simulation`` и синхронизируется сюда
+    #: тем же способом, что и счётчики RNG, — единственной точкой перед записью.
+    scheduler: dict = field(default_factory=lambda: {"events": [], "next_order": 0})
 
     def to_dict(self) -> dict:
         return {
@@ -90,10 +94,15 @@ class GameState:
             "speed": self.speed,
             "company": self.company.to_dict(),
             "rng": {"counters": dict(self.rng_counters)},
+            "scheduler": {
+                "events": [dict(event) for event in self.scheduler.get("events", [])],
+                "next_order": self.scheduler.get("next_order", 0),
+            },
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> GameState:
+        scheduler = data["scheduler"]
         return cls(
             seed=data["seed"],
             tick=data["tick"],
@@ -101,4 +110,8 @@ class GameState:
             speed=data["speed"],
             company=CompanyState.from_dict(data["company"]),
             rng_counters=dict(data["rng"]["counters"]),
+            scheduler={
+                "events": [dict(event) for event in scheduler["events"]],
+                "next_order": scheduler["next_order"],
+            },
         )

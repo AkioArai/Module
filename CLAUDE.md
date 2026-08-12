@@ -173,7 +173,7 @@ module_sim/
     economy/        markets, contracts, finance, debt, bankruptcy
     physics/        reactor, thermo, xenon, burnup, wear
     people/         staff, roles, permissions, union, grievance
-    events/         registry, causes
+    events/         scheduler (очередь), registry (обработчики), causes
     scripting/      api, sandbox
   ui/               Textual: app, screens/, widgets/, theme.tcss
   persistence/      save.py, codec.py, paths.py, migrations/
@@ -240,8 +240,16 @@ CI гоняет `pytest` и `ruff` на каждый push (`.github/workflows/ci
 **Поле состояния.** `core/state.py` → `CURRENT_SCHEMA_VERSION` →
 `migrations/vNNN.py` → фикстура. Всё в одном коммите (SAVEFORMAT.md, §5).
 
-**Событие.** Интенсивность из состояния мира, запись причины и предиктора в
+**Событие.** Обработчик регистрируется декоратором `@registry.handler("вид")`,
+ставится в очередь через `Simulation.schedule_in(часов, "вид", payload)`.
+Интенсивность выводится из состояния мира, причина и предиктор пишутся в
 журнал, предиктор выведен в UI (И8).
+
+Обработчик обязан быть **чистой функцией состояния**: он не читает системное
+время, случайность берёт из своего потока RNG, а всё, что должно случиться
+позже, ставит в очередь, а не ждёт. События одного тика срабатывают в порядке
+постановки; обработчик имеет право поставить новое событие на текущий тик, но
+бесконечный каскад падает по `MAX_EVENT_CASCADE`.
 
 **Экран UI.** `ui/screens/`, стили в `theme.tcss` (никаких цветов в коде),
 данные берутся из состояния только на чтение — UI не мутирует симуляцию, а
