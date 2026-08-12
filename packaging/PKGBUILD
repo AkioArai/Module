@@ -33,7 +33,9 @@ checkdepends=(
 )
 
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+# Не SKIP: контрольная сумма — единственное, что отличает «скачал релиз» от
+# «скачал то, что подсунули». Обновляется вместе с pkgver.
+sha256sums=('d348c4f3eb22a46f9698facc5568afaf081e9a5efab351c05cff040c7beb4c0c')
 
 build() {
   cd "$srcdir/Module-$pkgver"
