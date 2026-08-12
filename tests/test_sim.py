@@ -67,13 +67,12 @@ def test_catchup_equivalence_in_pieces():
     assert_states_equivalent(snapshot(batched), snapshot(stepwise))
 
 
-def test_discrete_state_is_exact_while_it_stays_discrete():
-    """Пока непрерывных величин нет, догон обязан совпадать точно.
+def test_idle_game_is_exact():
+    """Остановленная станция обязана совпадать точно.
 
-    Тест перестанет быть тавтологией ровно в тот момент, когда в состоянии
-    появится первый эволюционирующий ``float`` — и тогда он должен упасть,
-    заставив автора осознанно перевести проверку на допуск, а не сделать это
-    по недосмотру.
+    Ноль эволюционирует в ноль без всякой погрешности, и если этот тест
+    когда-нибудь упадёт — значит завелась величина, которая шевелится сама по
+    себе, без причины в состоянии мира (И8).
     """
     stepwise = make_sim()
     stepwise.run(1000)
@@ -82,6 +81,34 @@ def test_discrete_state_is_exact_while_it_stays_discrete():
     batched.catch_up(1000)
 
     assert_states_exact(snapshot(batched), snapshot(stepwise))
+
+
+def test_running_reactor_is_where_the_tolerance_starts_working():
+    """Первая настоящая проверка И4а: работающий блок разъезжает выгорание.
+
+    Именно ради этого случая инвариант расщепляли. Разбиение на блоки всегда
+    разное — оно задаётся моментами событий, — и накопленное выгорание в двух
+    путях отличается в последних разрядах. Требовать здесь точного равенства
+    было бы требованием, которое невозможно выполнить.
+
+    А вот касса обязана совпасть **точно**: она меняется только в дискретном
+    событии расчёта, и округление происходит на одних и тех же тиках
+    (economy/market.py).
+    """
+    stepwise = make_sim()
+    stepwise.state.reactor.power_setpoint = 1.0
+    stepwise.run(2000)
+
+    batched = make_sim()
+    batched.state.reactor.power_setpoint = 1.0
+    batched.catch_up(2000)
+
+    assert_states_equivalent(snapshot(batched), snapshot(stepwise))
+    assert batched.state.company.cash_cents == stepwise.state.company.cash_cents
+    assert batched.state.reactor.burnup != stepwise.state.reactor.burnup, (
+        "выгорание совпало точно — либо реактор не работал, либо вернулась "
+        "формула, не зависящая от разбиения; тогда допуск больше ничего не стережёт"
+    )
 
 
 def test_same_seed_same_world():

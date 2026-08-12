@@ -26,7 +26,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-__all__ = ["SPEED_MULTIPLIER", "CompanyState", "GameState", "Speed"]
+__all__ = [
+    "SPEED_MULTIPLIER",
+    "CompanyState",
+    "GameState",
+    "MarketState",
+    "ReactorState",
+    "Speed",
+]
 
 
 class Speed:
@@ -66,6 +73,63 @@ class CompanyState:
 
 
 @dataclass(slots=True)
+class ReactorState:
+    """Блок. Фаза 1: мощность и выгорание, без кинетики и ксенона.
+
+    Первые непрерывные величины партии — с них контракт И4а перестаёт быть
+    теоретическим (CLAUDE.md, §И4а).
+    """
+
+    #: Уставка и текущая мощность в долях номинала, 0…1.
+    power_setpoint: float = 0.0
+    power_level: float = 0.0
+    #: Доля выработанной топливной кампании. Единица — топливо выработано;
+    #: обрыва на ней в фазе 1 нет, см. physics/reactor.py.
+    burnup: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "power_setpoint": self.power_setpoint,
+            "power_level": self.power_level,
+            "burnup": self.burnup,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ReactorState:
+        return cls(
+            power_setpoint=data["power_setpoint"],
+            power_level=data["power_level"],
+            burnup=data["burnup"],
+        )
+
+
+@dataclass(slots=True)
+class MarketState:
+    """Расчёты за энергию (economy/market.py).
+
+    Хранится накопленная выработка и уже выплаченное за неё. Разница между ними
+    и есть очередной платёж — так ошибка округления не накапливается по
+    периодам, сколько бы их ни прошло.
+    """
+
+    energy_sold_mwh: float = 0.0
+    revenue_paid_cents: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "energy_sold_mwh": self.energy_sold_mwh,
+            "revenue_paid_cents": self.revenue_paid_cents,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> MarketState:
+        return cls(
+            energy_sold_mwh=data["energy_sold_mwh"],
+            revenue_paid_cents=data["revenue_paid_cents"],
+        )
+
+
+@dataclass(slots=True)
 class GameState:
     """Корень состояния партии.
 
@@ -85,6 +149,12 @@ class GameState:
     #: словарём: ``Scheduler`` живёт в ``Simulation`` и синхронизируется сюда
     #: тем же способом, что и счётчики RNG, — единственной точкой перед записью.
     scheduler: dict = field(default_factory=lambda: {"events": [], "next_order": 0})
+    reactor: ReactorState = field(default_factory=ReactorState)
+    market: MarketState = field(default_factory=MarketState)
+    #: Приказы сырыми словарями — как и очередь событий. Объекты ``Order``
+    #: создаются поверх по надобности (core/orders.py).
+    orders: list[dict] = field(default_factory=list)
+    next_order_id: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -98,6 +168,10 @@ class GameState:
                 "events": [dict(event) for event in self.scheduler.get("events", [])],
                 "next_order": self.scheduler.get("next_order", 0),
             },
+            "reactor": self.reactor.to_dict(),
+            "market": self.market.to_dict(),
+            "orders": [dict(order) for order in self.orders],
+            "next_order_id": self.next_order_id,
         }
 
     @classmethod
@@ -114,4 +188,8 @@ class GameState:
                 "events": [dict(event) for event in scheduler["events"]],
                 "next_order": scheduler["next_order"],
             },
+            reactor=ReactorState.from_dict(data["reactor"]),
+            market=MarketState.from_dict(data["market"]),
+            orders=[dict(order) for order in data["orders"]],
+            next_order_id=data["next_order_id"],
         )

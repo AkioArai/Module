@@ -28,8 +28,15 @@ from __future__ import annotations
 from module_sim.core.clock import Clock
 from module_sim.core.events import registry
 from module_sim.core.events.scheduler import ScheduledEvent, Scheduler
+from module_sim.core.physics import reactor
 from module_sim.core.rng import Rng
 from module_sim.core.state import GameState
+
+#: Расчёт за энергию раз в игровые сутки. Продублировано из ``economy.market``
+#: строкой, чтобы ``sim`` не зависел от подсистем: подсистемы знают о ``sim``,
+#: обратная зависимость сделала бы цикл (economy/market.py).
+SETTLEMENT_KIND = "market.settlement"
+SETTLEMENT_INTERVAL_HOURS = 24
 
 __all__ = ["MAX_EVENT_CASCADE", "Simulation"]
 
@@ -61,6 +68,7 @@ class Simulation:
         #: состояния: это факт про текущую загрузку, о котором надо сказать
         #: игроку и забыть (core/events/registry.py).
         self.unknown_events: list[str] = []
+        self._ensure_bootstrap_events()
 
     @classmethod
     def new_game(cls, seed: int, epoch: float, company_name: str | None = None) -> Simulation:
@@ -68,6 +76,20 @@ class Simulation:
         if company_name:
             state.company.name = company_name
         return cls(state)
+
+    def _ensure_bootstrap_events(self) -> None:
+        """Завести события, без которых партия не живёт.
+
+        Нужно не только новой партии: сейв, поднятый миграцией с версии, где
+        подсистемы ещё не было, тоже приходит без её событий. Проверка идёт по
+        очереди, а не по флагу в состоянии, — флаг пришлось бы мигрировать и
+        держать в согласии с реальностью.
+        """
+        if any(event.kind == SETTLEMENT_KIND for event in self.scheduler.pending()):
+            return
+        interval = SETTLEMENT_INTERVAL_HOURS
+        next_tick = (self.state.tick // interval + 1) * interval
+        self.scheduler.schedule(next_tick, SETTLEMENT_KIND, not_before=self.state.tick)
 
     # -- планирование ----------------------------------------------------
 
@@ -98,6 +120,11 @@ class Simulation:
         if hours <= 0:
             return
         self.rng.stream(HEARTBEAT_STREAM).skip(hours)
+        # Реактор — первая непрерывная подсистема. Выработка копится дробной:
+        # в деньги она превращается только в событии расчёта, иначе округление
+        # происходило бы в разных точках у батчевого и потикового пути и касса
+        # разошлась бы (economy/market.py).
+        self.state.market.energy_sold_mwh += reactor.advance(self.state.reactor, hours)
         self.clock.advance(hours)
 
     def _fire(self, event: ScheduledEvent) -> None:
@@ -156,3 +183,12 @@ class Simulation:
 
     def __repr__(self) -> str:
         return f"Simulation(tick={self.state.tick}, seed={self.state.seed})"
+
+
+# Импорт подсистем в самом низу — только ради регистрации обработчиков событий
+# (core/events/registry.py). Наверх его не поднять: подсистемы ссылаются на
+# ``Simulation``, и наверху это был бы цикл. Отсюда же следует, что подсистема,
+# не упомянутая здесь, просто не будет знать своих событий, и сейв с ними
+# загрузится с предупреждением — молча ломаться нечему.
+from module_sim.core import orders as _orders  # noqa: E402,F401
+from module_sim.core.economy import market as _market  # noqa: E402,F401

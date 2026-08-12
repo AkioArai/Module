@@ -24,9 +24,12 @@ from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import Footer, Static
 
+from module_sim.core import orders
+from module_sim.core.physics import reactor
 from module_sim.core.sim import Simulation
 from module_sim.core.state import SPEED_MULTIPLIER, Speed
 from module_sim.persistence import save as save_mod
+from module_sim.ui.widgets.station_panel import StationPanel
 from module_sim.ui.widgets.time_panel import TimePanel
 
 __all__ = ["ModuleApp"]
@@ -66,6 +69,10 @@ class ModuleApp(App):
         Binding("1", "speed('x1')", "1x"),
         Binding("2", "speed('x5')", "5x"),
         Binding("3", "speed('x50')", "50x"),
+        Binding("up", "power(0.1)", "Мощность +"),
+        Binding("down", "power(-0.1)", "Мощность −"),
+        Binding("r", "order('refuel')", "Перегрузка"),
+        Binding("m", "order('maintenance')", "ТО"),
         Binding("s", "save_now", "Сохранить"),
         Binding("d", "toggle_dark", "Тема"),
         Binding("q", "quit", "Выход"),
@@ -94,23 +101,20 @@ class ModuleApp(App):
         #: Не только ради скорости: таймер кадра может сработать в момент, когда
         #: виджеты уже сняты (выход, смена экрана), и поиск упал бы NoMatches.
         self._panel: TimePanel | None = None
+        self._station: StationPanel | None = None
 
     # -- разметка --------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield TimePanel(id="time-panel")
         with Container(id="body"):
-            yield Static(
-                "[b]Пусто.[/b]\n\n"
-                "Фаза 0: каркас, часы и сохранения.\n"
-                "Реактор, рынок и персонал появятся в следующих фазах.",
-                id="placeholder",
-            )
+            yield StationPanel(id="station")
         yield Static(self.notice_text, id="notice")
         yield Footer()
 
     def on_mount(self) -> None:
         self._panel = self.query_one(TimePanel)
+        self._station = self.query_one(StationPanel)
         self._frame_at = time.monotonic()
         self._last_autosave_at = self._frame_at
         self.set_interval(FRAME_INTERVAL, self._on_frame)
@@ -156,6 +160,24 @@ class ModuleApp(App):
         panel.speed = state.speed
         panel.tick = state.tick
 
+        station = self._station
+        if station is None:
+            return
+        station.power_mw = reactor.electric_mw(state.reactor)
+        station.setpoint = state.reactor.power_setpoint
+        station.level = state.reactor.power_level
+        station.burnup = state.reactor.burnup
+        station.cash_cents = state.company.cash_cents
+        station.energy_mwh = state.market.energy_sold_mwh
+        station.orders_line = self._orders_line()
+
+    def _orders_line(self) -> str:
+        active = orders.active_orders(self.simulation)
+        if not active:
+            return "нет"
+        now = self.simulation.state.tick
+        return ", ".join(f"{raw['kind']} (осталось {raw['ends_tick'] - now} ч)" for raw in active)
+
     def _maybe_autosave(self, now: float) -> None:
         state = self.simulation.state
         if state.tick - self._last_autosave_tick < AUTOSAVE_EVERY_TICKS:
@@ -192,6 +214,26 @@ class ModuleApp(App):
         self._tick_debt = 0.0
         self._refresh_panel()
 
+    def action_power(self, delta: float) -> None:
+        """Сдвинуть уставку мощности. Блок пойдёт к ней сам, ждать не нужно."""
+        reactor_state = self.simulation.state.reactor
+        target = min(1.0, max(0.0, reactor_state.power_setpoint + delta))
+        reactor_state.power_setpoint = target
+        self._refresh_panel()
+
+    def action_order(self, kind: str) -> None:
+        """Отдать приказ. Управление возвращается сразу (И7)."""
+        try:
+            order = orders.issue_order(self.simulation, kind)
+        except ValueError as exc:
+            self.query_one("#notice", Static).update(str(exc))
+            return
+        hours = order.ends_tick - order.issued_tick
+        self.query_one("#notice", Static).update(
+            f"Приказ «{order.kind}» принят, завершится через {hours} ч."
+        )
+        self._refresh_panel()
+
     def action_save_now(self) -> None:
         self._save()
         self.query_one("#notice", Static).update("Сохранено.")
@@ -200,4 +242,5 @@ class ModuleApp(App):
         # Выход обязан оставить партию на диске: инвариант И6 запрещает любую
         # активность после закрытия, значит последний шанс — здесь.
         self._panel = None
+        self._station = None
         self._save()

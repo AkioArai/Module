@@ -14,11 +14,15 @@ from __future__ import annotations
 import asyncio
 import time
 
+import pytest
+
+from module_sim.core import orders
 from module_sim.core.sim import Simulation
 from module_sim.core.state import Speed
 from module_sim.persistence import paths
 from module_sim.persistence import save as save_mod
 from module_sim.ui.app import MAX_FRAME_ELAPSED_S, MAX_TICKS_PER_FRAME, ModuleApp
+from module_sim.ui.widgets.station_panel import StationPanel
 from module_sim.ui.widgets.time_panel import TimePanel
 
 EPOCH = 1_767_225_600.0  # 01.01.2026 UTC
@@ -42,7 +46,7 @@ def test_app_starts_and_shows_game_date():
             panel = app.query_one(TimePanel)
             assert panel.game_date == "01.01.2026 00:00"
             assert panel.speed == Speed.X1
-            assert "Пусто" in str(app.query_one("#placeholder").render())
+            assert "Блок" in str(app.query_one(StationPanel).render())
 
     run(scenario())
 
@@ -128,22 +132,20 @@ def test_time_advances_while_running():
 
 
 def test_long_stall_does_not_simulate_proportionally():
-    """Затык на минуту не должен считать час игрового времени в одном кадре."""
+    """Затык на минуту не должен считать час игрового времени в одном кадре.
+
+    Приложение не поднимается: нужен ровно один кадр, а живой таймер добавлял
+    бы свои и делал тест плавающим.
+    """
     app, sim = make_app()
+    app.simulation.clock.set_speed(Speed.X50)
 
-    async def scenario():
-        async with app.run_test(size=(100, 24)) as pilot:
-            app.action_speed(Speed.X50)
-            await pilot.pause()
-            before = sim.state.tick
-            # Кадр «опоздал» на минуту реального времени.
-            app._frame_at -= 60.0
-            app._on_frame()
-            await pilot.pause()
-            # На 50x минута дала бы 3000 тиков; потолок обрезает до секунды.
-            assert sim.state.tick - before <= int(MAX_FRAME_ELAPSED_S * 50) + 1
+    # Кадр «опоздал» на минуту реального времени.
+    app._frame_at = time.monotonic() - 60.0
+    app._on_frame()
 
-    run(scenario())
+    # На 50x минута дала бы 3000 тиков; потолок обрезает до секунды.
+    assert sim.state.tick <= int(MAX_FRAME_ELAPSED_S * 50) + 1
 
 
 def _count_paths(monkeypatch) -> dict[str, int]:
@@ -198,5 +200,67 @@ def test_speed_change_does_not_spill_accumulated_debt():
             app._tick_debt = 0.99
             app.action_speed(Speed.X50)
             assert app._tick_debt == 0.0
+
+    run(scenario())
+
+
+# -- управление станцией ---------------------------------------------------
+
+
+def test_power_keys_move_the_setpoint():
+    """Уставка меняется мгновенно, мощность идёт к ней сама (И7)."""
+    app, sim = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.press("up")
+            await pilot.press("up")
+            assert sim.state.reactor.power_setpoint == pytest.approx(0.2)
+            await pilot.press("down")
+            assert sim.state.reactor.power_setpoint == pytest.approx(0.1)
+
+    run(scenario())
+
+
+def test_setpoint_stays_within_bounds():
+    app, sim = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            for _ in range(15):
+                await pilot.press("down")
+            assert sim.state.reactor.power_setpoint == 0.0
+            for _ in range(15):
+                await pilot.press("up")
+            assert sim.state.reactor.power_setpoint == pytest.approx(1.0)
+
+    run(scenario())
+
+
+def test_order_key_issues_an_order_and_reports_it():
+    app, sim = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.press("r")
+            await pilot.pause()
+            assert len(orders.active_orders(sim)) == 1
+            assert "Приказ" in str(app.query_one("#notice").render())
+
+    run(scenario())
+
+
+def test_station_panel_shows_running_block():
+    app, sim = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            sim.state.reactor.power_setpoint = 1.0
+            sim.run(24)
+            app._refresh_panel()
+            await pilot.pause()
+            text = str(app.query_one(StationPanel).render())
+            assert "МВт" in text
+            assert "Касса" in text
 
     run(scenario())
