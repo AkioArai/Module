@@ -36,11 +36,12 @@ def test_second_launch_catches_up(monkeypatch, capsys):
     saved = save_mod.load_game()
     assert saved.state.tick == 0
 
-    # Игрока не было три часа реального времени.
+    # Игрока не было три часа реального времени. При курсе «час за минуту»
+    # (DESIGN.md, §Р5) это 180 игровых часов, а не 10 800.
     monkeypatch.setattr("module_sim.cli.time.time", lambda: saved.saved_at + 3 * 3600)
     main(["run", "--headless"])
 
-    assert save_mod.load_game().state.tick == 3 * 3600
+    assert save_mod.load_game().state.tick == 3 * 60
     assert "Досчитано" in capsys.readouterr().out
 
 
