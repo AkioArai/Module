@@ -1,0 +1,77 @@
+{
+ "created_at": 1767225600.0,
+ "game": {
+  "company": {
+   "cash_cents": 324000000000,
+   "name": "Первый блок"
+  },
+  "epoch": 1767225600.0,
+  "finance": {
+   "assets_cents": 500000000000,
+   "covenant_breaches": 0,
+   "debt_cents": 403000000000,
+   "discharge_penalty_until_tick": 0,
+   "discharges": 0,
+   "grace_ends_tick": 0,
+   "months_below_covenant": 0,
+   "revenue_at_last_month_cents": 207300000000,
+   "status": "норма"
+  },
+  "market": {
+   "energy_sold_mwh": 1080000.0,
+   "revenue_paid_cents": 324000000000
+  },
+  "next_order_id": 1,
+  "orders": [
+   {
+    "ends_tick": 1200,
+    "event_order": 48,
+    "id": 0,
+    "issued_tick": 1080,
+    "kind": "maintenance",
+    "payload": {},
+    "status": "выполняется"
+   }
+  ],
+  "reactor": {
+   "burnup": 0.08333333333333431,
+   "power_level": 0.0,
+   "power_setpoint": 0.0
+  },
+  "rng": {
+   "counters": {
+    "sim.heartbeat": 1104
+   }
+  },
+  "scheduler": {
+   "events": [
+    {
+     "kind": "market.settlement",
+     "order": 49,
+     "payload": {},
+     "tick": 1128
+    },
+    {
+     "kind": "order.complete",
+     "order": 48,
+     "payload": {
+      "order_id": 0
+     },
+     "tick": 1200
+    },
+    {
+     "kind": "finance.month",
+     "order": 31,
+     "payload": {},
+     "tick": 1440
+    }
+   ],
+   "next_order": 50
+  },
+  "seed": 20250101,
+  "speed": "x1",
+  "tick": 1104
+ },
+ "saved_at": 1770000000.0,
+ "schema_version": 5
+}

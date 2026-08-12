@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from module_sim.cli import main
+from module_sim.core.economy import finance
 from module_sim.persistence import paths
 from module_sim.persistence import save as save_mod
 
@@ -117,3 +118,61 @@ def test_version(capsys):
         main(["--version"])
     assert exc.value.code == 0
     assert "Module" in capsys.readouterr().out
+
+
+def test_bankruptcy_while_away_becomes_a_second_chance(monkeypatch, capsys):
+    """§Р5: партия не заканчивается за выключенным экраном.
+
+    Компания доводится до банкротства прямо в сейве, затем игра запускается
+    так, будто игрока не было. При возвращении он обязан получить срок, а не
+    сообщение о проигрыше.
+    """
+    main(["run", "--new", "--seed", "42", "--headless"])
+    saved = save_mod.load_game()
+    # Компания в предбанкротном состоянии, срок истекает через час, долг такой,
+    # что выкарабкаться уже нечем.
+    saved.state.finance.status = finance.STATUS_GRACE
+    saved.state.finance.grace_ends_tick = saved.state.tick + 1
+    saved.state.finance.debt_cents = finance.STATION_VALUE_CENTS * 3
+    save_mod.save_game(saved.state, now=saved.saved_at, created_at=saved.created_at)
+
+    reloaded = save_mod.load_game()
+    # Сутки реального отсутствия — этого хватает, чтобы месячное событие
+    # финансов успело сработать и срок истёк без игрока.
+    monkeypatch.setattr("module_sim.cli.time.time", lambda: reloaded.saved_at + 24 * 3600)
+    main(["run", "--headless"])
+
+    out = capsys.readouterr().out
+    assert "срок на исправление" in out
+    assert save_mod.load_game().state.finance.status == finance.STATUS_GRACE
+
+
+def test_bankruptcy_seen_by_the_player_ends_the_game(monkeypatch, capsys):
+    """А вот банкротство, которое игрок застал, партию заканчивает и оставляет
+    долг следующей — иначе провал ничего не стоил бы."""
+    main(["run", "--new", "--seed", "42", "--headless"])
+    saved = save_mod.load_game()
+    saved.state.finance.status = finance.STATUS_BANKRUPT
+    saved.state.finance.debt_cents = finance.STATION_VALUE_CENTS * 3
+    save_mod.save_game(saved.state, now=saved.saved_at, created_at=saved.created_at)
+
+    reloaded = save_mod.load_game()
+    # Времени не прошло: значит статус не мог измениться в догоне.
+    monkeypatch.setattr("module_sim.cli.time.time", lambda: reloaded.saved_at)
+    main(["run", "--headless"])
+
+    assert "обанкротилась" in capsys.readouterr().out
+    assert save_mod.load_meta().carried_debt_cents > 0
+    assert save_mod.load_meta().bankruptcies == 1
+
+
+def test_carried_debt_lands_on_the_next_game(capsys):
+    meta = save_mod.load_meta()
+    meta.carried_debt_cents = 100_000_000_000
+    save_mod.save_meta(meta)
+
+    main(["run", "--new", "--seed", "7", "--headless"])
+
+    assert "перешёл на эту" in capsys.readouterr().out
+    state = save_mod.load_game().state
+    assert state.finance.debt_cents == finance.STARTING_DEBT_CENTS + 100_000_000_000

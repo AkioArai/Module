@@ -32,11 +32,13 @@ from module_sim.core.physics import reactor
 from module_sim.core.rng import Rng
 from module_sim.core.state import GameState
 
-#: Расчёт за энергию раз в игровые сутки. Продублировано из ``economy.market``
-#: строкой, чтобы ``sim`` не зависел от подсистем: подсистемы знают о ``sim``,
-#: обратная зависимость сделала бы цикл (economy/market.py).
-SETTLEMENT_KIND = "market.settlement"
-SETTLEMENT_INTERVAL_HOURS = 24
+#: Периодические события, без которых партия не живёт: вид и период в часах.
+#: Продублировано из подсистем строками, чтобы ``sim`` от них не зависел —
+#: подсистемы знают о ``sim``, обратная зависимость сделала бы цикл.
+PERIODIC_EVENTS: tuple[tuple[str, int], ...] = (
+    ("market.settlement", 24),  # расчёт за энергию, economy/market.py
+    ("finance.month", 30 * 24),  # проценты, расходы, ковенанты, economy/finance.py
+)
 
 __all__ = ["MAX_EVENT_CASCADE", "Simulation"]
 
@@ -85,11 +87,12 @@ class Simulation:
         очереди, а не по флагу в состоянии, — флаг пришлось бы мигрировать и
         держать в согласии с реальностью.
         """
-        if any(event.kind == SETTLEMENT_KIND for event in self.scheduler.pending()):
-            return
-        interval = SETTLEMENT_INTERVAL_HOURS
-        next_tick = (self.state.tick // interval + 1) * interval
-        self.scheduler.schedule(next_tick, SETTLEMENT_KIND, not_before=self.state.tick)
+        pending = {event.kind for event in self.scheduler.pending()}
+        for kind, interval in PERIODIC_EVENTS:
+            if kind in pending:
+                continue
+            next_tick = (self.state.tick // interval + 1) * interval
+            self.scheduler.schedule(next_tick, kind, not_before=self.state.tick)
 
     # -- планирование ----------------------------------------------------
 
@@ -191,4 +194,5 @@ class Simulation:
 # не упомянутая здесь, просто не будет знать своих событий, и сейв с ними
 # загрузится с предупреждением — молча ломаться нечему.
 from module_sim.core import orders as _orders  # noqa: E402,F401
+from module_sim.core.economy import finance as _finance  # noqa: E402,F401
 from module_sim.core.economy import market as _market  # noqa: E402,F401

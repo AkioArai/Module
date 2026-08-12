@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from module_sim import __version__
+from module_sim.core.economy import finance
 from module_sim.core.sim import Simulation
 from module_sim.core.state import Speed
 from module_sim.persistence import paths
@@ -47,7 +48,14 @@ def _load_or_create(args: argparse.Namespace) -> tuple[Simulation, float, str]:
     if args.new or not save_mod.has_save(save_path):
         seed = args.seed if args.seed is not None else int(now * 1000) & 0x7FFF_FFFF
         simulation = Simulation.new_game(seed=seed, epoch=now)
-        return simulation, now, f"Новая партия. Seed {seed}."
+        meta = save_mod.load_meta()
+        finance.start_company(simulation, meta.carried_debt_cents)
+        note = f"Новая партия. Seed {seed}."
+        if meta.carried_debt_cents:
+            note += (
+                f" Долг прошлой компании — {meta.carried_debt_cents / 100:,.0f} ₽ — перешёл на эту."
+            ).replace(",", " ")
+        return simulation, now, note
 
     result = save_mod.load_game(save_path)
     simulation = Simulation(result.state)
@@ -60,6 +68,8 @@ def _load_or_create(args: argparse.Namespace) -> tuple[Simulation, float, str]:
         first = result.migrated[0].from_version
         last = result.migrated[-1].to_version
         notes.append(f"Сейв обновлён со схемы v{first} до v{last}.")
+
+    status_before = simulation.state.finance.status
 
     missed = simulation.clock.missed(result.saved_at, now)
     if missed.ticks:
@@ -80,6 +90,31 @@ def _load_or_create(args: argparse.Namespace) -> tuple[Simulation, float, str]:
             f"Отброшено {_plural_hours(missed.dropped)} сверх потолка догона — "
             f"проверьте системное время."
         )
+
+    became_bankrupt_away = (
+        simulation.state.finance.status == finance.STATUS_BANKRUPT
+        and status_before != finance.STATUS_BANKRUPT
+    )
+    if became_bankrupt_away:
+        # DESIGN.md, §Р5: партия не заканчивается, пока игрока нет.
+        finance.grant_return_grace(simulation)
+        notes.append(
+            "Пока вас не было, компания дошла до банкротства. "
+            f"Дан срок на исправление — {finance.GRACE_HOURS // 24} суток."
+        )
+    elif simulation.state.finance.status == finance.STATUS_BANKRUPT:
+        carried = finance.carried_debt_cents(simulation)
+        meta = save_mod.load_meta()
+        meta.carried_debt_cents = carried
+        meta.bankruptcies += 1
+        save_mod.save_meta(meta)
+        notes.append(
+            f"Компания обанкротилась. Непогашенный долг — {carried / 100:,.0f} ₽ — "
+            "перейдёт на следующую партию. Начните новую: module --new.".replace(",", " ")
+        )
+    elif simulation.state.finance.status == finance.STATUS_GRACE:
+        left = max(0, simulation.state.finance.grace_ends_tick - simulation.state.tick)
+        notes.append(f"Предбанкротное состояние: на исправление осталось {left // 24} суток.")
 
     if simulation.unknown_events:
         kinds = ", ".join(sorted(set(simulation.unknown_events)))

@@ -25,6 +25,7 @@ from textual.containers import Container
 from textual.widgets import Footer, Static
 
 from module_sim.core import orders
+from module_sim.core.economy import finance
 from module_sim.core.physics import reactor
 from module_sim.core.sim import Simulation
 from module_sim.core.state import SPEED_MULTIPLIER, Speed
@@ -169,7 +170,20 @@ class ModuleApp(App):
         station.burnup = state.reactor.burnup
         station.cash_cents = state.company.cash_cents
         station.energy_mwh = state.market.energy_sold_mwh
+        station.debt_cents = state.finance.debt_cents
+        station.equity_cents = finance.equity_cents(self.simulation)
+        station.rate = finance.annual_rate(self.simulation)
+        station.status = state.finance.status
+        station.status_note = self._status_note()
         station.orders_line = self._orders_line()
+
+    def _status_note(self) -> str:
+        """Срок на исправление всегда на виду: провал обязан быть предсказуем (И8)."""
+        state = self.simulation.state
+        if state.finance.status != finance.STATUS_GRACE:
+            return ""
+        left = max(0, state.finance.grace_ends_tick - state.tick)
+        return f" (осталось {left // 24} сут)"
 
     def _orders_line(self) -> str:
         active = orders.active_orders(self.simulation)

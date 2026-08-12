@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 __all__ = [
     "SPEED_MULTIPLIER",
     "CompanyState",
+    "FinanceState",
     "GameState",
     "MarketState",
     "ReactorState",
@@ -130,6 +131,48 @@ class MarketState:
 
 
 @dataclass(slots=True)
+class FinanceState:
+    """Долг, ставка и состояние компании (economy/finance.py).
+
+    Всё в целых копейках и меняется только в месячном событии — иначе округление
+    происходило бы в разных точках у батчевого и потикового пути (И4а).
+    """
+
+    debt_cents: int = 0
+    assets_cents: int = 0
+    #: Месяцев подряд, когда выручка не покрыла проценты и расходы.
+    months_below_covenant: int = 0
+    #: Сколько раз ковенант был нарушен совсем: каждое нарушение дорожает долг.
+    covenant_breaches: int = 0
+    status: str = "норма"
+    #: Тик, когда истекает срок на исправление. Ноль — срока нет.
+    grace_ends_tick: int = 0
+    #: До какого тика действует наказание за списание долга.
+    discharge_penalty_until_tick: int = 0
+    discharges: int = 0
+    #: Снимок выплаченной выручки на прошлом месячном событии — из разницы
+    #: считается, покрыл ли месяц свои расходы.
+    revenue_at_last_month_cents: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "debt_cents": self.debt_cents,
+            "assets_cents": self.assets_cents,
+            "months_below_covenant": self.months_below_covenant,
+            "covenant_breaches": self.covenant_breaches,
+            "status": self.status,
+            "grace_ends_tick": self.grace_ends_tick,
+            "discharge_penalty_until_tick": self.discharge_penalty_until_tick,
+            "discharges": self.discharges,
+            "revenue_at_last_month_cents": self.revenue_at_last_month_cents,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> FinanceState:
+        return cls(**{key: data[key] for key in cls.__slots__})
+
+
+@dataclass(slots=True)
 class GameState:
     """Корень состояния партии.
 
@@ -151,6 +194,7 @@ class GameState:
     scheduler: dict = field(default_factory=lambda: {"events": [], "next_order": 0})
     reactor: ReactorState = field(default_factory=ReactorState)
     market: MarketState = field(default_factory=MarketState)
+    finance: FinanceState = field(default_factory=FinanceState)
     #: Приказы сырыми словарями — как и очередь событий. Объекты ``Order``
     #: создаются поверх по надобности (core/orders.py).
     orders: list[dict] = field(default_factory=list)
@@ -170,6 +214,7 @@ class GameState:
             },
             "reactor": self.reactor.to_dict(),
             "market": self.market.to_dict(),
+            "finance": self.finance.to_dict(),
             "orders": [dict(order) for order in self.orders],
             "next_order_id": self.next_order_id,
         }
@@ -190,6 +235,7 @@ class GameState:
             },
             reactor=ReactorState.from_dict(data["reactor"]),
             market=MarketState.from_dict(data["market"]),
+            finance=FinanceState.from_dict(data["finance"]),
             orders=[dict(order) for order in data["orders"]],
             next_order_id=data["next_order_id"],
         )

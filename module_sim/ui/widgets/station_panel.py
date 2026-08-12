@@ -39,6 +39,11 @@ class StationPanel(Static):
     burnup: reactive[float] = reactive(0.0)
     cash_cents: reactive[int] = reactive(0)
     energy_mwh: reactive[float] = reactive(0.0)
+    debt_cents: reactive[int] = reactive(0)
+    equity_cents: reactive[int] = reactive(0)
+    rate: reactive[float] = reactive(0.0)
+    status: reactive[str] = reactive("норма")
+    status_note: reactive[str] = reactive("")
     orders_line: reactive[str] = reactive("нет")
 
     def render(self) -> str:
@@ -50,6 +55,10 @@ class StationPanel(Static):
                 "",
                 f"[b]Касса[/b]  {money(self.cash_cents)}",
                 f"        отпущено {self.energy_mwh:,.0f} МВт·ч".replace(",", " "),
+                "",
+                f"[b]Долг[/b]   {money(self.debt_cents)}   ставка {self.rate * 100:.0f}%",
+                f"        капитал {money(self.equity_cents)}   "
+                f"состояние: {self.status}{self.status_note}",
                 "",
                 f"[b]Приказы[/b] {self.orders_line}",
             )

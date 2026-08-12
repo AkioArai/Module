@@ -30,10 +30,12 @@ def test_settlement_pays_for_produced_energy():
 
 
 def test_idle_station_earns_nothing():
+    """Выручки нет. Касса при этом падает — простой оплачивается из кармана,
+    расходы от мощности не зависят (economy/finance.py)."""
     sim = make(power=0.0)
-    before = sim.state.company.cash_cents
     sim.run(24 * 30)
-    assert sim.state.company.cash_cents == before
+    assert sim.state.market.revenue_paid_cents == 0
+    assert sim.state.market.energy_sold_mwh == 0.0
 
 
 def test_payment_is_the_difference_not_the_period():
