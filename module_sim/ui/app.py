@@ -25,7 +25,7 @@ from textual.containers import Container
 from textual.widgets import Footer, Static
 
 from module_sim.core import orders
-from module_sim.core.economy import finance
+from module_sim.core.economy import contracts, finance, fuel, market, prices
 from module_sim.core.physics import reactor
 from module_sim.core.sim import Simulation
 from module_sim.core.state import SPEED_MULTIPLIER, Speed
@@ -170,12 +170,49 @@ class ModuleApp(App):
         station.burnup = state.reactor.burnup
         station.cash_cents = state.company.cash_cents
         station.energy_mwh = state.market.energy_sold_mwh
+        station.price_cents = market.current_price_cents(self.simulation)
+        station.price_note = self._price_note()
+        station.contract_line = self._contract_line()
+        station.fuel_line = self._fuel_line()
         station.debt_cents = state.finance.debt_cents
         station.equity_cents = finance.equity_cents(self.simulation)
         station.rate = finance.annual_rate(self.simulation)
         station.status = state.finance.status
         station.status_note = self._status_note()
         station.orders_line = self._orders_line()
+
+    def _price_note(self) -> str:
+        """Полоса цены на сегодня: где мы внутри суточного профиля.
+
+        Одна цена не говорит ничего — важно, дорогой сейчас час или дешёвый.
+        Это же и предиктор штрафа по договору: недопоставка в дорогой час стоит
+        дороже, и видеть это игрок обязан **до** события (И8).
+        """
+        state = self.simulation.state
+        table = prices.day_table(
+            prices.day_index(state.tick), state.market.noise, state.market.demand_deviation
+        )
+        low = min(table.values) / 100
+        high = max(table.values) / 100
+        return f"   (сутки {low:,.0f}…{high:,.0f})".replace(",", " ")
+
+    def _contract_line(self) -> str:
+        contract = self.simulation.state.market.ppa
+        if contract is None:
+            return "нет, вся выработка на спот"
+        left = contracts.remaining_hours(self.simulation) // 24
+        return (
+            f"{contract.volume_mwh:,.0f} МВт·ч/ч по {contract.price_cents / 100:,.0f} ₽, "
+            f"ещё {left} сут"
+        ).replace(",", " ")
+
+    def _fuel_line(self) -> str:
+        state = self.simulation.state
+        transit = fuel.in_transit_tons(self.simulation)
+        line = f"{state.fuel.stock_tons:.1f} т"
+        if transit > 0.0:
+            line += f", в пути {transit:.1f} т"
+        return line
 
     def _status_note(self) -> str:
         """Срок на исправление всегда на виду: провал обязан быть предсказуем (И8)."""

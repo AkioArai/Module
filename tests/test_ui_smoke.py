@@ -17,6 +17,7 @@ import time
 import pytest
 
 from module_sim.core import orders
+from module_sim.core.economy import contracts, fuel
 from module_sim.core.sim import Simulation
 from module_sim.core.state import Speed
 from module_sim.persistence import paths
@@ -262,5 +263,43 @@ def test_station_panel_shows_running_block():
             text = str(app.query_one(StationPanel).render())
             assert "МВт" in text
             assert "Касса" in text
+
+    run(scenario())
+
+
+def test_station_panel_shows_the_market():
+    """Цена, договор и запас топлива обязаны быть на виду.
+
+    Не для красоты: недопоставка по договору в дорогой час стоит дороже, и
+    параметр, по которому игрок мог это предвидеть, показывают **до** события,
+    а не в журнале после (И8).
+    """
+    app, sim = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            sim.state.reactor.power_setpoint = 1.0
+            contracts.sign_ppa(sim, volume_mwh=500.0)
+            fuel.order(sim, 4.0)
+            sim.run(24)
+            app._refresh_panel()
+            await pilot.pause()
+
+            text = str(app.query_one(StationPanel).render())
+            assert "₽/МВт·ч" in text
+            assert "договор: 500 МВт·ч/ч" in text
+            assert "в пути 4.0 т" in text
+
+    run(scenario())
+
+
+def test_station_panel_says_when_there_is_no_contract():
+    app, _ = make_app()
+
+    async def scenario():
+        async with app.run_test(size=(100, 24)) as pilot:
+            app._refresh_panel()
+            await pilot.pause()
+            assert "вся выработка на спот" in str(app.query_one(StationPanel).render())
 
     run(scenario())

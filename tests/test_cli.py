@@ -37,12 +37,12 @@ def test_second_launch_catches_up(monkeypatch, capsys):
     saved = save_mod.load_game()
     assert saved.state.tick == 0
 
-    # Игрока не было три часа реального времени. При курсе «час за минуту»
-    # (DESIGN.md, §Р5) это 180 игровых часов, а не 10 800.
+    # Игрока не было три часа реального времени. При курсе «сутки за час»
+    # (DESIGN.md, §Р5) это трое игровых суток, а не 10 800 часов.
     monkeypatch.setattr("module_sim.cli.time.time", lambda: saved.saved_at + 3 * 3600)
     main(["run", "--headless"])
 
-    assert save_mod.load_game().state.tick == 3 * 60
+    assert save_mod.load_game().state.tick == 3 * 24
     assert "Досчитано" in capsys.readouterr().out
 
 
@@ -137,9 +137,9 @@ def test_bankruptcy_while_away_becomes_a_second_chance(monkeypatch, capsys):
     save_mod.save_game(saved.state, now=saved.saved_at, created_at=saved.created_at)
 
     reloaded = save_mod.load_game()
-    # Сутки реального отсутствия — этого хватает, чтобы месячное событие
-    # финансов успело сработать и срок истёк без игрока.
-    monkeypatch.setattr("module_sim.cli.time.time", lambda: reloaded.saved_at + 24 * 3600)
+    # Двое суток реального отсутствия — при курсе «сутки за час» этого хватает,
+    # чтобы месячное событие финансов успело сработать и срок истёк без игрока.
+    monkeypatch.setattr("module_sim.cli.time.time", lambda: reloaded.saved_at + 48 * 3600)
     main(["run", "--headless"])
 
     out = capsys.readouterr().out

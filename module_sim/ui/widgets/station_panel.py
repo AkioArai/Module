@@ -39,6 +39,10 @@ class StationPanel(Static):
     burnup: reactive[float] = reactive(0.0)
     cash_cents: reactive[int] = reactive(0)
     energy_mwh: reactive[float] = reactive(0.0)
+    price_cents: reactive[float] = reactive(0.0)
+    price_note: reactive[str] = reactive("")
+    contract_line: reactive[str] = reactive("нет")
+    fuel_line: reactive[str] = reactive("")
     debt_cents: reactive[int] = reactive(0)
     equity_cents: reactive[int] = reactive(0)
     rate: reactive[float] = reactive(0.0)
@@ -50,8 +54,14 @@ class StationPanel(Static):
         return "\n".join(
             (
                 f"[b]Блок[/b]   {self.power_mw:>7,.0f} МВт   {bar(self.level)}".replace(",", " "),
-                f"        уставка {self.setpoint * 100:>3.0f}%   топливо "
-                f"выработано на {self.burnup * 100:.1f}%",
+                f"        уставка {self.setpoint * 100:>3.0f}%   кампания "
+                f"выработана на {self.burnup * 100:.1f}%",
+                f"        топливо {self.fuel_line}",
+                "",
+                f"[b]Рынок[/b]  {self.price_cents / 100:,.0f} ₽/МВт·ч{self.price_note}".replace(
+                    ",", " "
+                ),
+                f"        договор: {self.contract_line}",
                 "",
                 f"[b]Касса[/b]  {money(self.cash_cents)}",
                 f"        отпущено {self.energy_mwh:,.0f} МВт·ч".replace(",", " "),

@@ -22,7 +22,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from module_sim.core.economy import bankruptcy_discount
+from module_sim.core.clock import MONTH_HOURS
+from module_sim.core.economy import apply_cash, bankruptcy_discount
+from module_sim.core.economy import fuel as fuel_module
 from module_sim.core.events import registry
 from module_sim.core.events.scheduler import ScheduledEvent
 
@@ -35,6 +37,7 @@ __all__ = [
     "STATUS_BANKRUPT",
     "STATUS_GRACE",
     "STATUS_NORMAL",
+    "assets_cents",
     "discharge",
     "equity_cents",
     "start_company",
@@ -42,18 +45,19 @@ __all__ = [
 
 MONTH_KIND = "finance.month"
 
-#: Игровой месяц. Тридцать суток — то же округление, что у топливной кампании
-#: (BALANCE.md, §2.5), чтобы периоды в игре были соизмеримы.
-MONTH_HOURS = 30 * 24
-
 #: BALANCE.md, §5. Станция заложена: балансовая стоимость много меньше, чем
 #: стоила бы постройка, потому что игрок получает её уже в кредит.
 STATION_VALUE_CENTS = 500_000_000_000
 STARTING_DEBT_CENTS = 400_000_000_000
 
-#: Операционные расходы: топливо, персонал, обслуживание. Не зависят от
-#: мощности — остановленный блок обходится почти так же дорого, как рабочий, и
-#: в этом вся суть простоя.
+#: Операционные расходы: персонал, обслуживание, налоги на имущество. Не
+#: зависят от мощности — остановленный блок обходится почти так же дорого, как
+#: рабочий, и в этом вся суть простоя.
+#:
+#: Топливо сюда больше не входит: с фазы 2б оно покупается контрактом с лагом
+#: поставки и платится по факту (economy/fuel.py). Число при этом не менялось —
+#: в старом виде топливо занимало в нём около процента, потому что цена тонны
+#: была занижена на два порядка (BALANCE.md, §4).
 OPEX_MONTHLY_CENTS = 50_000_000_000
 
 #: Базовая ставка и надбавка за каждый месяц нарушения ковенанта (BALANCE.md, §5).
@@ -88,11 +92,27 @@ def start_company(simulation: Simulation, carried_debt_cents: int = 0) -> None:
     finance.assets_cents = STATION_VALUE_CENTS
 
 
+def assets_cents(simulation: Simulation) -> int:
+    """Активы: деньги, балансовая стоимость станции и склад топлива.
+
+    Запас топлива входит в активы по текущей цене рынка. Иначе закупка на
+    четыре месяца вперёд выглядела бы обеднением компании — деньги ушли, а
+    взамен ничего не появилось, — и осторожность (заказать заранее) наказывалась
+    бы приближением к банкротству. Это ровно та ошибка учёта, которая заставляет
+    игрока делать глупости ради формального показателя.
+    """
+    state = simulation.state
+    return (
+        state.company.cash_cents
+        + state.finance.assets_cents
+        + fuel_module.inventory_value_cents(state.fuel)
+    )
+
+
 def equity_cents(simulation: Simulation) -> int:
     """Капитал: активы минус обязательства. Отрицательный — компания банкрот
     по балансу, даже если на счету ещё есть деньги."""
-    state = simulation.state
-    return state.company.cash_cents + state.finance.assets_cents - state.finance.debt_cents
+    return assets_cents(simulation) - simulation.state.finance.debt_cents
 
 
 def annual_rate(simulation: Simulation) -> float:
@@ -116,19 +136,6 @@ def _charge_interest(simulation: Simulation) -> int:
     interest = round(finance.debt_cents * monthly)
     finance.debt_cents += interest
     return interest
-
-
-def _pay_and_borrow(simulation: Simulation, amount_cents: int) -> None:
-    """Списать расход. Не хватило кассы — разница уходит в долг.
-
-    Касса не уходит в минус никогда: отрицательные деньги на счету — это уже
-    заём, и честнее называть его заёмом.
-    """
-    company = simulation.state.company
-    company.cash_cents -= amount_cents
-    if company.cash_cents < 0:
-        simulation.state.finance.debt_cents += -company.cash_cents
-        company.cash_cents = 0
 
 
 def _update_covenant(simulation: Simulation, interest_cents: int, opex_cents: int) -> None:
@@ -185,7 +192,7 @@ def _check_bankruptcy(simulation: Simulation) -> None:
 @registry.handler(MONTH_KIND)
 def _on_month(simulation: Simulation, event: ScheduledEvent) -> None:
     interest = _charge_interest(simulation)
-    _pay_and_borrow(simulation, OPEX_MONTHLY_CENTS)
+    apply_cash(simulation, -OPEX_MONTHLY_CENTS)
     _update_covenant(simulation, interest, OPEX_MONTHLY_CENTS)
     _check_bankruptcy(simulation)
     simulation.schedule_in(MONTH_HOURS, MONTH_KIND)
@@ -200,11 +207,10 @@ def carried_debt_cents(simulation: Simulation) -> int:
     Активы продаются с дисконтом — распродажа под принуждением всегда дешевле
     (BALANCE.md, §5: BANKRUPTCY_ASSET_DISCOUNT).
     """
-    finance = simulation.state.finance
-    recovered = simulation.state.company.cash_cents + round(
-        finance.assets_cents * bankruptcy_discount()
-    )
-    return max(0, finance.debt_cents - recovered)
+    state = simulation.state
+    sellable = state.finance.assets_cents + fuel_module.inventory_value_cents(state.fuel)
+    recovered = state.company.cash_cents + round(sellable * bankruptcy_discount())
+    return max(0, state.finance.debt_cents - recovered)
 
 
 def discharge(simulation: Simulation) -> int:

@@ -152,6 +152,35 @@ def test_v002_converts_money_to_integer_kopecks():
     assert "balance" not in data["game"]["company"]
 
 
+def test_v006_does_not_claw_back_earned_revenue():
+    """Самая дорогая ошибка, которую могла бы сделать миграция фазы 2б.
+
+    До неё выручка считалась как «энергия × фиксированная цена», после —
+    из копилок начисленного, и расчёт платит **разницу** между причитающимся и
+    уже выплаченным. Оставь миграция копилки нулевыми — в первом же расчёте
+    разница оказалась бы равной минус всей выручке партии, и игра честно
+    списала бы с компании всё, что она заработала за годы.
+
+    Проверяется на настоящем сейве фазы 2а, а не на синтетике: в нём выручка
+    накоплена по-старому.
+    """
+    old = load_fixture(FIXTURE_SAVES / "v005.json")
+    paid = old["game"]["market"]["revenue_paid_cents"]
+    assert paid > 0, "фикстура ничего не заработала — тест проверял бы пустоту"
+
+    data, _ = migrate(old)
+    sim = Simulation(GameState.from_dict(data["game"]))
+    cash_before = sim.state.company.cash_cents
+
+    # Ровно до первого суточного расчёта и чуть дальше.
+    sim.catch_up(48)
+
+    assert sim.state.company.cash_cents > cash_before - paid // 100, (
+        "миграция потеряла выручку старой партии в первом же расчёте"
+    )
+    assert sim.state.market.revenue_paid_cents >= paid
+
+
 def test_migrations_do_not_import_core_state():
     """Миграция обязана работать с сырым dict вечно (SAVEFORMAT.md, §5)."""
     migrations_dir = REPO_ROOT / "module_sim" / "persistence" / "migrations"
