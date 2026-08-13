@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "module-sim"
-version = "0.1.0"
+version = "0.2.0"
 description = "Терминальная idle-игра: симулятор энергокомпании с атомной станцией"
 readme = "README.md"
 requires-python = ">=3.11"
