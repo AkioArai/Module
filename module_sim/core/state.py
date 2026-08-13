@@ -30,8 +30,10 @@ __all__ = [
     "SPEED_MULTIPLIER",
     "CompanyState",
     "FinanceState",
+    "FuelState",
     "GameState",
     "MarketState",
+    "PpaContract",
     "ReactorState",
     "Speed",
 ]
@@ -63,7 +65,7 @@ class CompanyState:
     """Компания игрока. В фазе 0 — только название и касса."""
 
     name: str = "Модуль"
-    cash_cents: int = 5_000_000_000_0  # 5 млрд ₽, BALANCE.md §5 CASH_START
+    cash_cents: int = 5_000_000_000_0  # 500 млн ₽, BALANCE.md §5 CASH_START
 
     def to_dict(self) -> dict:
         return {"name": self.name, "cash_cents": self.cash_cents}
@@ -105,29 +107,124 @@ class ReactorState:
 
 
 @dataclass(slots=True)
+class PpaContract:
+    """Договор на поставку по фиксированной цене (DESIGN.md, §3.3).
+
+    ``volume_mwh`` — обязательство в каждый час, а не суммарное за срок: PPA
+    отрезает от ценовых пиков и превращает любой простой в прямой убыток,
+    потому что штраф платится, даже когда блок стоит.
+    """
+
+    volume_mwh: float = 0.0
+    price_cents: int = 0
+    signed_tick: int = 0
+    ends_tick: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "volume_mwh": self.volume_mwh,
+            "price_cents": self.price_cents,
+            "signed_tick": self.signed_tick,
+            "ends_tick": self.ends_tick,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PpaContract:
+        return cls(**{key: data[key] for key in cls.__slots__})
+
+
+@dataclass(slots=True)
 class MarketState:
     """Расчёты за энергию (economy/market.py).
 
-    Хранится накопленная выработка и уже выплаченное за неё. Разница между ними
+    Хранится накопленная выручка и уже выплаченное по ней. Разница между ними
     и есть очередной платёж — так ошибка округления не накапливается по
     периодам, сколько бы их ни прошло.
+
+    Начисленное держится в трёх копилках, а не в одной: игрок обязан видеть,
+    сколько принёс спот, сколько договор и сколько отняли штрафы. Свёрнутая в
+    одно число выручка не отвечает на вопрос «а если бы я не хеджировался»,
+    а он и есть главный экономический вопрос игры.
+
+    ``noise`` и ``demand_deviation`` — случайная часть цены. Они меняются
+    **ровно раз в игровые сутки**, дискретным событием: цена, разыгрываемая
+    каждый час, превратила бы догон в потиковый цикл (economy/prices.py).
     """
 
     energy_sold_mwh: float = 0.0
     revenue_paid_cents: int = 0
+    #: Отклонение цены от уровня, безразмерное. Процесс возврата к среднему.
+    noise: float = 0.0
+    #: Относительное отклонение спроса от нормы, ``(D − D_norm) / D_norm``.
+    demand_deviation: float = 0.0
+    #: Начисленное, копейки дробные: в целые превращается только в расчёте.
+    spot_accrued_cents: float = 0.0
+    ppa_accrued_cents: float = 0.0
+    penalty_accrued_cents: float = 0.0
+    #: Накопленная недопоставка по договору и её значение на прошлом расчёте:
+    #: из разницы видно, был ли срыв поставки в этих сутках.
+    ppa_shortfall_mwh: float = 0.0
+    ppa_shortfall_settled_mwh: float = 0.0
+    ppa: PpaContract | None = None
 
     def to_dict(self) -> dict:
         return {
             "energy_sold_mwh": self.energy_sold_mwh,
             "revenue_paid_cents": self.revenue_paid_cents,
+            "noise": self.noise,
+            "demand_deviation": self.demand_deviation,
+            "spot_accrued_cents": self.spot_accrued_cents,
+            "ppa_accrued_cents": self.ppa_accrued_cents,
+            "penalty_accrued_cents": self.penalty_accrued_cents,
+            "ppa_shortfall_mwh": self.ppa_shortfall_mwh,
+            "ppa_shortfall_settled_mwh": self.ppa_shortfall_settled_mwh,
+            "ppa": self.ppa.to_dict() if self.ppa is not None else None,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> MarketState:
+        contract = data["ppa"]
         return cls(
             energy_sold_mwh=data["energy_sold_mwh"],
             revenue_paid_cents=data["revenue_paid_cents"],
+            noise=data["noise"],
+            demand_deviation=data["demand_deviation"],
+            spot_accrued_cents=data["spot_accrued_cents"],
+            ppa_accrued_cents=data["ppa_accrued_cents"],
+            penalty_accrued_cents=data["penalty_accrued_cents"],
+            ppa_shortfall_mwh=data["ppa_shortfall_mwh"],
+            ppa_shortfall_settled_mwh=data["ppa_shortfall_settled_mwh"],
+            ppa=PpaContract.from_dict(contract) if contract is not None else None,
         )
+
+
+@dataclass(slots=True)
+class FuelState:
+    """Топливо: запас на складе и цена рынка (economy/fuel.py).
+
+    Поставки здесь не хранятся: заказанное едет событием ``fuel.delivery`` в
+    очереди планировщика, а очередь и так уходит в сейв. Дублировать её списком
+    в состоянии — значит завести две правды об одном факте и однажды получить
+    поставку, которая доехала дважды.
+
+    ``price_noise`` — состояние процесса цены, а не сама цена. Цена вычислима
+    из него (``price_cents_per_ton``), а вычислимое в сейве не хранится: два
+    поля рано или поздно разойдутся.
+    """
+
+    #: Стартовый запас — годовая потребность (BALANCE.md, §4: FUEL_START_TONS).
+    #: Станция достаётся игроку с уже загруженным складом: заказывать топливо в
+    #: первый же час, когда лаг поставки четыре месяца, было бы не решением, а
+    #: обязательной формальностью.
+    stock_tons: float = 24.0
+    price_noise: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {"stock_tons": self.stock_tons, "price_noise": self.price_noise}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> FuelState:
+        return cls(stock_tons=data["stock_tons"], price_noise=data["price_noise"])
 
 
 @dataclass(slots=True)
@@ -194,6 +291,7 @@ class GameState:
     scheduler: dict = field(default_factory=lambda: {"events": [], "next_order": 0})
     reactor: ReactorState = field(default_factory=ReactorState)
     market: MarketState = field(default_factory=MarketState)
+    fuel: FuelState = field(default_factory=FuelState)
     finance: FinanceState = field(default_factory=FinanceState)
     #: Приказы сырыми словарями — как и очередь событий. Объекты ``Order``
     #: создаются поверх по надобности (core/orders.py).
@@ -214,6 +312,7 @@ class GameState:
             },
             "reactor": self.reactor.to_dict(),
             "market": self.market.to_dict(),
+            "fuel": self.fuel.to_dict(),
             "finance": self.finance.to_dict(),
             "orders": [dict(order) for order in self.orders],
             "next_order_id": self.next_order_id,
@@ -235,6 +334,7 @@ class GameState:
             },
             reactor=ReactorState.from_dict(data["reactor"]),
             market=MarketState.from_dict(data["market"]),
+            fuel=FuelState.from_dict(data["fuel"]),
             finance=FinanceState.from_dict(data["finance"]),
             orders=[dict(order) for order in data["orders"]],
             next_order_id=data["next_order_id"],

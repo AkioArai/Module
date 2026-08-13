@@ -13,3 +13,11 @@ dist/
 save.json
 save.json.*
 meta.json
+
+# Мусор makepkg. Сам PKGBUILD в git обязательно, а собранное им — нет:
+# пакет и распакованные исходники весят мегабайты и пересобираются одной
+# командой.
+packaging/pkg/
+packaging/src/
+packaging/*.pkg.tar.zst
+packaging/*.tar.gz

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from module_sim.core.clock import MAX_CATCHUP_TICKS, Clock
+from module_sim.core.economy import finance
 from module_sim.core.state import GameState, Speed
 
 EPOCH = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
@@ -45,25 +46,35 @@ def test_unknown_speed_rejected():
         make_clock().set_speed("x1000")
 
 
-def test_catchup_one_hour_per_minute():
-    """Курс догона: игровой час за реальную минуту (DESIGN.md, §Р5)."""
+def test_catchup_one_day_per_hour():
+    """Курс догона: игровые сутки за реальный час (DESIGN.md, §Р5).
+
+    Сутки — период суточного профиля цены и расчёта за энергию (economy),
+    и потому самая мелкая единица, которую вообще имеет смысл догонять.
+    """
     clock = make_clock()
-    assert clock.missed(saved_at=1000.0, now=1000.0 + 3600.0).ticks == 60
+    assert clock.missed(saved_at=1000.0, now=1000.0 + 3600.0).ticks == 24
 
 
-def test_a_week_of_exams_does_not_cost_decades():
-    """Главное следствие §Р5, ради которого курс и менялся.
+def test_a_week_of_exams_fits_inside_the_grace_period():
+    """Главное следствие §Р5, ради которого курс и калибровался.
 
-    При прежнем курсе неделя без игры превращалась в 69 игровых лет, и партия
-    гарантированно приходила к банкротству, которое ещё и тащит долг дальше.
-    Тест держит границу: неделя отсутствия — порядка топливной кампании, а не
-    геологической эпохи.
+    Срок на исправление перед банкротством — полгода. Если неделя отсутствия
+    длиннее него, партия, оставленная в беде, проигрывается без игрока, и
+    единственной защитой остаётся костыль ``grant_return_grace``. Курс выбран
+    так, чтобы защита не требовалась: учебная неделя короче срока.
+
+    Нижняя граница не менее важна: неделя обязана что-то значить, иначе
+    отсутствие перестаёт быть отсутствием и игра просто стоит на месте.
     """
     week = 7 * 24 * 3600.0
     ticks = make_clock().missed(saved_at=0.0, now=week).ticks
-    months = ticks / (24 * 30)
 
-    assert 6 < months < 24, f"неделя отсутствия дала {months:.1f} игровых месяцев"
+    assert ticks < finance.GRACE_HOURS, (
+        f"неделя отсутствия ({ticks} ч) длиннее срока на исправление "
+        f"({finance.GRACE_HOURS} ч): партия проиграется без игрока"
+    )
+    assert ticks > 3 * finance.MONTH_HOURS, "неделя отсутствия обязана быть заметной"
 
 
 def test_pause_freezes_the_world():
@@ -100,12 +111,12 @@ def test_capping_is_reported_not_silent():
 def test_partial_tick_is_dropped():
     """Догон начисляет целые часы; недобранный остаток пропадает.
 
-    При курсе «час за минуту» неполной оказывается любая отлучка короче
-    минуты — вышел за чаем, вернулся в тот же час.
+    При курсе «сутки за час» неполным оказывается любое отсутствие короче двух
+    с половиной минут — вышел за чаем, вернулся в тот же игровой час.
     """
     clock = make_clock()
-    assert clock.missed(saved_at=0.0, now=59.0).ticks == 0
-    assert clock.missed(saved_at=0.0, now=90.0).ticks == 1
+    assert clock.missed(saved_at=0.0, now=149.0).ticks == 0
+    assert clock.missed(saved_at=0.0, now=200.0).ticks == 1
 
 
 def test_clock_state_lives_in_game_state():

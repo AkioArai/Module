@@ -36,8 +36,9 @@ from module_sim.core.state import GameState
 #: Продублировано из подсистем строками, чтобы ``sim`` от них не зависел —
 #: подсистемы знают о ``sim``, обратная зависимость сделала бы цикл.
 PERIODIC_EVENTS: tuple[tuple[str, int], ...] = (
-    ("market.settlement", 24),  # расчёт за энергию, economy/market.py
+    ("market.settlement", 24),  # расчёт и цена новых суток, economy/market.py
     ("finance.month", 30 * 24),  # проценты, расходы, ковенанты, economy/finance.py
+    ("fuel.month", 30 * 24),  # цена топлива и закупка, economy/fuel.py
 )
 
 __all__ = ["MAX_EVENT_CASCADE", "Simulation"]
@@ -59,7 +60,7 @@ MAX_EVENT_CASCADE = 10_000
 class Simulation:
     """Партия целиком. Ничего не знает об интерфейсе (инвариант И1)."""
 
-    __slots__ = ("clock", "rng", "scheduler", "state", "unknown_events")
+    __slots__ = ("clock", "derived", "rng", "scheduler", "state", "unknown_events")
 
     def __init__(self, state: GameState) -> None:
         self.state = state
@@ -70,6 +71,12 @@ class Simulation:
         #: состояния: это факт про текущую загрузку, о котором надо сказать
         #: игроку и забыть (core/events/registry.py).
         self.unknown_events: list[str] = []
+        #: Производные величины подсистем: то, что целиком вычислимо из
+        #: состояния и потому в сейв не уходит. Пример — таблица цен на сутки
+        #: (economy/market.py): пересобрать её дешевле, чем поддерживать в
+        #: согласии с состоянием через миграции. Пустой словарь после загрузки
+        #: обязан давать ту же партию, что и прогретый.
+        self.derived: dict[str, object] = {}
         self._ensure_bootstrap_events()
 
     @classmethod
@@ -123,11 +130,16 @@ class Simulation:
         if hours <= 0:
             return
         self.rng.stream(HEARTBEAT_STREAM).skip(hours)
-        # Реактор — первая непрерывная подсистема. Выработка копится дробной:
-        # в деньги она превращается только в событии расчёта, иначе округление
-        # происходило бы в разных точках у батчевого и потикового пути и касса
-        # разошлась бы (economy/market.py).
-        self.state.market.energy_sold_mwh += reactor.advance(self.state.reactor, hours)
+        # Порядок здесь не вкусовой. Рынок интегрирует ``цена · мощность`` по
+        # траектории блока, а траектория задана мощностью **на его начало**;
+        # после хода реактора её уже не восстановить (economy/market.py).
+        _market.accrue(self, hours)
+        # Выработка копится дробной: в деньги она превращается только в событии
+        # расчёта, иначе округление происходило бы в разных точках у батчевого и
+        # потикового пути и касса разошлась бы.
+        produced_mwh = reactor.advance(self.state.reactor, hours)
+        self.state.market.energy_sold_mwh += produced_mwh
+        _fuel.consume(self, produced_mwh)
         self.clock.advance(hours)
 
     def _fire(self, event: ScheduledEvent) -> None:
@@ -188,11 +200,16 @@ class Simulation:
         return f"Simulation(tick={self.state.tick}, seed={self.state.seed})"
 
 
-# Импорт подсистем в самом низу — только ради регистрации обработчиков событий
-# (core/events/registry.py). Наверх его не поднять: подсистемы ссылаются на
-# ``Simulation``, и наверху это был бы цикл. Отсюда же следует, что подсистема,
-# не упомянутая здесь, просто не будет знать своих событий, и сейв с ними
-# загрузится с предупреждением — молча ломаться нечему.
+# Импорт подсистем в самом низу. Наверх его не поднять: подсистемы ссылаются на
+# ``Simulation``, и наверху это был бы цикл.
+#
+# Большинству из них импорт нужен только ради регистрации обработчиков событий
+# (core/events/registry.py): подсистема, не упомянутая здесь, просто не будет
+# знать своих событий, и сейв с ними загрузится с предупреждением — молча
+# ломаться нечему. Рынок и топливо вдобавок вызываются из ``_integrate``:
+# непрерывные величины у них есть, и считаются они между событиями.
 from module_sim.core import orders as _orders  # noqa: E402,F401
+from module_sim.core.economy import contracts as _contracts  # noqa: E402,F401
 from module_sim.core.economy import finance as _finance  # noqa: E402,F401
-from module_sim.core.economy import market as _market  # noqa: E402,F401
+from module_sim.core.economy import fuel as _fuel  # noqa: E402
+from module_sim.core.economy import market as _market  # noqa: E402

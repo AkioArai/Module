@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from module_sim.core.state import ReactorState
 
 __all__ = [
@@ -20,8 +22,10 @@ __all__ = [
     "EFFICIENCY_NOMINAL",
     "NOMINAL_ELECTRIC_MW",
     "RAMP_RATE_PER_HOUR",
+    "Ramp",
     "advance",
     "electric_mw",
+    "plan",
 ]
 
 #: BALANCE.md, §2.1.
@@ -43,6 +47,44 @@ def electric_mw(state: ReactorState) -> float:
     return state.power_level * NOMINAL_ELECTRIC_MW
 
 
+@dataclass(frozen=True, slots=True)
+class Ramp:
+    """Траектория мощности от текущего момента: наклон и излом.
+
+    Отдельным объектом — потому что траекторию читает не только реактор. Рынок
+    интегрирует по ней ``цена · мощность`` (economy/market.py), и считать
+    мощность **дважды двумя формулами** нельзя: разойдутся отпущенная энергия и
+    оплаченная, причём тихо и на копейки.
+
+    Время ``u`` отсчитывается от начала блока, в часах, и может быть дробным:
+    излом почти никогда не попадает на границу часа.
+    """
+
+    start: float
+    target: float
+    #: Доля номинала в час, со знаком. Ноль — уставка уже достигнута.
+    rate: float
+    #: Сколько часов длится наклон. Ноль — наклона нет.
+    hours: float
+
+    def level_at(self, u: float) -> float:
+        """Уровень мощности через ``u`` часов от начала блока, доля номинала."""
+        if u >= self.hours:
+            return self.target
+        return self.start + self.rate * u
+
+
+def plan(state: ReactorState) -> Ramp:
+    """Куда пойдёт мощность, если ничего не менять. Состояние не трогает."""
+    start = state.power_level
+    target = state.power_setpoint
+    delta = target - start
+    if delta == 0.0:
+        return Ramp(start=start, target=target, rate=0.0, hours=0.0)
+    rate = RAMP_RATE_PER_HOUR if delta > 0 else -RAMP_RATE_PER_HOUR
+    return Ramp(start=start, target=target, rate=rate, hours=abs(delta) / RAMP_RATE_PER_HOUR)
+
+
 def advance(state: ReactorState, hours: int) -> float:
     """Проэволюционировать реактор на ``hours`` часов. Вернуть выработку, МВт·ч.
 
@@ -54,23 +96,12 @@ def advance(state: ReactorState, hours: int) -> float:
     if hours <= 0:
         return 0.0
 
-    start = state.power_level
-    target = state.power_setpoint
-    delta = target - start
-
-    if delta == 0.0:
-        area = start * hours
-        end = start
-    else:
-        ramp_hours = abs(delta) / RAMP_RATE_PER_HOUR
-        if ramp_hours >= hours:
-            # Весь интервал — наклон, уставки не достигли.
-            end = start + (RAMP_RATE_PER_HOUR * hours if delta > 0 else -RAMP_RATE_PER_HOUR * hours)
-            area = (start + end) * 0.5 * hours
-        else:
-            # Излом внутри интервала: трапеция плюс прямоугольник.
-            area = (start + target) * 0.5 * ramp_hours + target * (hours - ramp_hours)
-            end = target
+    ramp = plan(state)
+    knee = min(ramp.hours, hours)
+    end = ramp.level_at(hours)
+    # Трапеция до излома плюс прямоугольник после него. Когда излома внутри
+    # интервала нет, одно из слагаемых обращается в ноль само.
+    area = (ramp.start + ramp.level_at(knee)) * 0.5 * knee + ramp.target * (hours - knee)
 
     state.power_level = end
 

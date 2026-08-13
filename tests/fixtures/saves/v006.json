@@ -1,0 +1,120 @@
+{
+ "created_at": 1767225600.0,
+ "game": {
+  "company": {
+   "cash_cents": 600312340048,
+   "name": "Первый блок"
+  },
+  "epoch": 1767225600.0,
+  "finance": {
+   "assets_cents": 500000000000,
+   "covenant_breaches": 0,
+   "debt_cents": 406022500000,
+   "discharge_penalty_until_tick": 0,
+   "discharges": 0,
+   "grace_ends_tick": 0,
+   "months_below_covenant": 0,
+   "revenue_at_last_month_cents": 526158655829,
+   "status": "норма"
+  },
+  "fuel": {
+   "price_noise": -0.0410727590686521,
+   "stock_tons": 19.0000000000024
+  },
+  "market": {
+   "demand_deviation": 0.10947705676162589,
+   "energy_sold_mwh": 1800000.0,
+   "noise": -0.05196393879286537,
+   "penalty_accrued_cents": 217323772.7571283,
+   "ppa": {
+    "ends_tick": 9600,
+    "price_cents": 306184,
+    "signed_tick": 960,
+    "volume_mwh": 500.0
+   },
+   "ppa_accrued_cents": 129730160800.0,
+   "ppa_shortfall_mwh": 2299.9999999999995,
+   "ppa_shortfall_settled_mwh": 0.0,
+   "revenue_paid_cents": 650312340048,
+   "spot_accrued_cents": 522003412970.33777
+  },
+  "next_order_id": 1,
+  "orders": [
+   {
+    "ends_tick": 1920,
+    "event_order": 84,
+    "id": 0,
+    "issued_tick": 1800,
+    "kind": "maintenance",
+    "payload": {},
+    "status": "выполняется"
+   }
+  ],
+  "reactor": {
+   "burnup": 0.1388888888888941,
+   "power_level": 0.0,
+   "power_setpoint": 0.0
+  },
+  "rng": {
+   "counters": {
+    "fuel.price": 4,
+    "market.demand": 150,
+    "market.noise": 150,
+    "sim.heartbeat": 1812
+   }
+  },
+  "scheduler": {
+   "events": [
+    {
+     "kind": "market.settlement",
+     "order": 83,
+     "payload": {},
+     "tick": 1824
+    },
+    {
+     "kind": "order.complete",
+     "order": 84,
+     "payload": {
+      "order_id": 0
+     },
+     "tick": 1920
+    },
+    {
+     "kind": "finance.month",
+     "order": 65,
+     "payload": {},
+     "tick": 2160
+    },
+    {
+     "kind": "fuel.month",
+     "order": 66,
+     "payload": {},
+     "tick": 2160
+    },
+    {
+     "kind": "fuel.delivery",
+     "order": 78,
+     "payload": {
+      "price_cents": 19195185924,
+      "tons": 6.0
+     },
+     "tick": 4560
+    },
+    {
+     "kind": "ppa.expire",
+     "order": 45,
+     "payload": {
+      "signed_tick": 960
+     },
+     "tick": 9600
+    }
+   ],
+   "next_order": 85
+  },
+  "seed": 20260813,
+  "speed": "x1",
+  "tick": 1812
+ },
+ "saved_at": 1767229200.0,
+ "schema_version": 6
+}
