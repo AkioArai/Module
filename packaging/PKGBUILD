@@ -6,7 +6,7 @@
 # виджетами Textual, а REPL — на модулях стандартной библиотеки.
 
 pkgname=module-sim
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Терминальная idle-игра: симулятор энергокомпании с атомной станцией"
 arch=('any')
